@@ -15,51 +15,19 @@ import VitalChart_distance from "./MQTT/MoreCharts/Charts/VitalChart_distance";
 import AutoPairChart from "../pages/MQTT/MoreCharts/Charts/AutoPairChart";
 
 
-/* -------------------------------------------------------
-   Smart JSON loader:
-   1) Try /public/tracks/<basename>.json via fetch
-   2) Fallback to import from src/components/tracks_data/<basename>.json
-------------------------------------------------------- */
-async function loadJsonFromTrackPath(rawPath, label = "Geo") {
+
+async function loadJsonFromTrackPath(rawPath, label = "Track") {
   if (!rawPath) throw new Error(`${label}: empty path`);
+  
+  const base = rawPath.split("/").pop();
 
-  // normalize slashes and take just the basename
-  let p = String(rawPath).replace(/\\/g, "/");
-  const base = p.split("/").pop(); // e.g. "most_autodrom_endurance.json"
+  const modules = import.meta.glob("../components/tracks_data/**/*.json", { import: "default" });
 
-  // 1) Try public path first
-  const publicUrl = `/tracks/${base}`;
-  try {
-    const res = await fetch(publicUrl);
-    const text = await res.text();
-    if (res.ok && !text.trim().startsWith("<")) {
-      return JSON.parse(text);
-    }
-    // If we got HTML, fall through to src import
-    if (text.trim().startsWith("<")) {
-      console.warn(`${label}: ${publicUrl} returned HTML, trying src fallback…`);
-    }
-  } catch (_) {
-    // ignore and try fallback
-  }
-
-  // 2) Fallback: import from src/components/tracks_data
-  const modules = import.meta.glob(
-    "../components/tracks_data/*.json",
-    { import: "default" }
-  );
-  const key = Object.keys(modules).find((k) => k.endsWith(`/${base}`));
-  if (!key) {
-    throw new Error(
-      `${label}: not found in public (${publicUrl}) or src/components/tracks_data (${base})`
-    );
-  }
-  try {
-    const mod = await modules[key](); // actual JSON object
-    return mod;
-  } catch (e) {
-    throw new Error(`${label}: failed to import ${key} (${e.message})`);
-  }
+  const key = Object.keys(modules).find(k => k.endsWith(`/${base}`));
+  
+  if (!key) throw new Error(`${label}: not found in src/components/tracks_data (${base})`);
+  
+  return modules[key]();
 }
 
 export default function Dashboard() {
@@ -94,7 +62,7 @@ export default function Dashboard() {
           loadJsonFromTrackPath(trackData.trackFile, "Geo"),
           loadJsonFromTrackPath(trackData.gates, "Gates"),
         ]);
-
+        // console.log(geoJson,gatesJson)
         setGeoData(geoJson);
         setGatesData(Array.isArray(gatesJson) ? gatesJson : (gatesJson.gates || gatesJson));
       } catch (err) {

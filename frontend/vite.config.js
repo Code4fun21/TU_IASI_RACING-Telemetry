@@ -1,15 +1,20 @@
+// frontend/vite.config.js
 import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react-swc";   // <-- use SWC plugin you already installed
+import tailwind from "@tailwindcss/vite";       // <-- Tailwind v4 plugin
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    tailwind(),
+  ],
   server: {
     proxy: {
       "/_api": {
-        target: "http://localhost:8080", // your FastAPI dev server
+        target: "http://localhost:8080",       // FastAPI port
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/_api/, ""),
-        ws: true, // proxy websockets too
+        ws: true,                               // important for Socket.IO / WS
       },
     },
   },

@@ -365,7 +365,7 @@ class CSV_Tables:
         # self.__corners=
         self.__mainCoor=csv_class.get_main_coordinates()
         self.__gates_pos=csv_class.get_gates()
-        print(self.__gates_pos,self.__mainCoor)
+        print("GAtes&Coor",self.__gates_pos,self.__mainCoor)
         self.__id_data_map = {
             1520: ([2,2,2,2],[1,0.001,0.001,1]),
             1522: ([2,2,2,2],[0,0.1,0.1,0.1]),
@@ -722,7 +722,7 @@ class CSV_Tables:
                 data = self.sep_data(row[2])
                 self.create_el(_id, aux, data, time)  # will emit GPSPoint only if id==279
 
-            with open(self.__csv_files[file], mode='r', newline='') as openedFile:
+            with open(self.__csv_files[file], mode='r', newline='',encoding="utf-8", errors="replace") as openedFile:
                 reader = csv.reader(openedFile)
 
                 for row in reader:
