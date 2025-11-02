@@ -1,0 +1,72 @@
+[
+    {
+        "csvFile": "simulations\\can_gps_log.csv",
+        "trackId": 1,
+        "sessionId": 1,
+        "date": "2025-07-28",
+        "time": "10:27:41"
+    },
+    {
+        "csvFile": "Bacau_2025-07-28_10-27-40.csv",
+        "trackId": 1,
+        "sessionId": 2,
+        "date": "2025-07-31",
+        "time": "15:46:26"
+    },
+    {
+        "csvFile": "Bacau_sim.csv",
+        "trackId": 1,
+        "sessionId": 3,
+        "date": "2025-08-05",
+        "time": "11:44:40"
+    },
+    {
+        "csvFile": "Bacau_2025-08-05_19-11-03.csv",
+        "trackId": 1,
+        "sessionId": 4,
+        "date": "2025-08-05",
+        "time": "19:11:04"
+    },
+    {
+        "csvFile": "Bacau_full_telemetry.csv",
+        "trackId": 1,
+        "sessionId": 5,
+        "date": "2025-08-05",
+        "time": "19:11:42"
+    },
+    {
+        "csvFile": "Bacau_sim.csv",
+        "trackId": 1,
+        "sessionId": 6,
+        "date": "2025-08-06",
+        "time": "13:02:15"
+    },
+    {
+        "csvFile": "D:/mine/facultate/tuiasiRacing/app/TUIasiRacing-Backend/data_files/log_with_no_wifi_933.csv",
+        "trackId": 2,
+        "sessionId": 7,
+        "date": "2025-08-07",
+        "time": "13:02:15"
+    },
+    {
+        "csvFile": "D:\\mine\\facultate\\tuiasiRacing\\app\\TUIasiRacing-Backend\\filtered_coolant.csv",
+        "trackId": 3,
+        "sessionId": 11,
+        "date": "2025-10-21",
+        "time": "15:56:31"
+    },
+    {
+        "csvFile": "Bacau_2025-10-28_21-36-09.csv",
+        "trackId": 1,
+        "sessionId": 12,
+        "date": "2025-10-28",
+        "time": "21:36:09"
+    },
+    {
+        "csvFile": "Bacau_2025-11-02_17-24-48.csv",
+        "trackId": 1,
+        "sessionId": 13,
+        "date": "2025-11-02",
+        "time": "17:24:49"
+    }
+]
