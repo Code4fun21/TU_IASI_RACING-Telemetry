@@ -597,8 +597,8 @@ class CSV_Tables:
     def check_cross(self, finalize: bool = False):
         """
         ALWAYS test S0 first on every segment.
-        - If we see S0 with no S2 yet → (re)start lap at S0 (resync)
-        - If we see S0 after S2        → close lap (S3) and start new lap at that S0
+        - If we see S0 with no S2 yet -> (re)start lap at S0 (resync)
+        - If we see S0 after S2        -> close lap (S3) and start new lap at that S0
         Also flushes incomplete lap on finalize=True.
         """
         def _push_current_lap(complete: bool, t_for_row=None):
@@ -639,14 +639,14 @@ class CSV_Tables:
                 self.__track_len = 0
                 self._gate_idx = 1
                 self.__just_s0 = True
-                print(f"[CHECK_CROSS] → new lap start (S0) at {t0}")
+                print(f"[CHECK_CROSS] -> new lap start (S0) at {t0}")
             else:
                 # start/resync lap at this S0
                 self.__lap = {"S0": t0}
                 self.__track_len = 0
                 self._gate_idx = 1
                 self.__just_s0 = True
-                print(f"[CHECK_CROSS] → lap start (S0) at {t0}")
+                print(f"[CHECK_CROSS] -> lap start (S0) at {t0}")
         else:
             # Then look for the expected sector (S1 or S2)
             seq = ["S0", "S1", "S2"]
@@ -657,7 +657,7 @@ class CSV_Tables:
                 if g.get_intersection_time():
                     t = g.get_time()
                     self.__lap[name] = t
-                    print(f"[CHECK_CROSS] → recorded {name} at {t}")
+                    print(f"[CHECK_CROSS] -> recorded {name} at {t}")
                     self._gate_idx += 1
 
         # accumulate distance after S0
@@ -670,7 +670,7 @@ class CSV_Tables:
         if finalize and "S0" in self.__lap and "S3" not in self.__lap:
             t_last = self.__lap.get("S2") or self.__lap.get("S1") or self.__lap.get("S0") or \
                     getattr(curr, "time", None) or getattr(curr, "timestamp", None) or 0
-            print(f"[CHECK_CROSS] finalize → pushing INCOMPLETE lap: {self.__lap} (t={t_last})")
+            print(f"[CHECK_CROSS] finalize -> pushing INCOMPLETE lap: {self.__lap} (t={t_last})")
             _push_current_lap(complete=False, t_for_row=t_last)
 
         self.__prev_pos = curr
@@ -692,12 +692,7 @@ class CSV_Tables:
    
 
     async def add_data_from(self, file: int, reorder_window_s: float = 0.5):
-        """
-        Stream CSV rows and feed them to the lap detector in (mostly) time order
-        without sorting the entire file. A small heap buffer reorders out-of-order
-        rows within `reorder_window_s`. IDs are parsed as HEX->INT and only id==279
-        is used for GPS (your choice).
-        """
+
         try:
             print("Opening file:", self.__csv_files[file])
 
@@ -732,7 +727,7 @@ class CSV_Tables:
                     try:
                         t = float(row[0])
                     except Exception:
-                        # malformed time → skip
+                        # malformed time -> skip
                         continue
 
                     if have_max_t is None:
@@ -752,7 +747,7 @@ class CSV_Tables:
                     _t, row = heapq.heappop(heap)
                     _process_row(row)
 
-            # EOF → flush any in-progress lap
+            # EOF -> flush any in-progress lap
             self.check_cross(finalize=True)
 
         except Exception as e:
@@ -1303,7 +1298,7 @@ class MQTT_Tables:
         # first point: prime and bail
         if self.__prev_pos is None:
             self.__prev_pos = self.__curr_pos
-            # initialize sector index: 0=S0→1=S1→2=S2→3=finish (S0)
+            # initialize sector index: 0=S0->1=S1->2=S2->3=finish (S0)
             self._gate_idx = 0
             return
 
@@ -1330,9 +1325,9 @@ class MQTT_Tables:
                 t=gate.get_time()
                 self.__lap[name] = t
                 if name == "S0":
-                    print(f"[CHECK_CROSS] → lap start (S0) at {t}")
+                    print(f"[CHECK_CROSS] -> lap start (S0) at {t}")
                 else:
-                    print(f"[CHECK_CROSS] → recorded {name} at {t}")
+                    print(f"[CHECK_CROSS] -> recorded {name} at {t}")
                 # advance to next sector (or finish next)
                 self._gate_idx += 1
 
@@ -1353,7 +1348,7 @@ class MQTT_Tables:
                     # reset for next lap: start with S0 at this finish time
                     self.__lap = {"S0": t}
                     self.__track_len = 0
-                    print(f"[CHECK_CROSS] → new lap start (S0) at {t}")
+                    print(f"[CHECK_CROSS] -> new lap start (S0) at {t}")
 
                     # now expect S1 next
                     self._gate_idx = 1
