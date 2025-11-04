@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+boto3
+botocore
+python-dotenv
+python-socketio
+aiohttp
+pandas
+numpy
+paho-mqtt
+lttb

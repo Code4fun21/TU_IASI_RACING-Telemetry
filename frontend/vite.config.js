@@ -11,7 +11,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/_api": {
-        target: "http://localhost:8080",       // FastAPI port
+        target: "https://tuiasi-telemetry-api.fly.dev",       // FastAPI port
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/_api/, ""),
         ws: true,                               // important for Socket.IO / WS
