@@ -8,7 +8,7 @@ import threading
 import time
 
 class WebSocketServer:
-    def __init__(self, host="127.0.0.1", port=8081):
+    def __init__(self, host="wss://tuiasi-telemetry-api.fly.dev", port=8081):
         self.host = host
         self.port = port
 

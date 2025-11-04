@@ -18,10 +18,14 @@ import { useLocation } from "react-router-dom";
 const navigationOnline = [
     { name: "Drivers and Monoposts", href: "/data-input", icon: AdjustmentsHorizontalIcon, current: true },
     { name: "Dashboard", href: "/live-dashboard", icon: HomeIcon, current: false },
-    { name: "Offline data", href: "/offline-data", icon: UsersIcon, current: false },
+    { name: "Advance Charts", href: "/live-advance-charts", icon: UsersIcon, current: false },
     // { name: "Longer charts", href: "/longer-charts", icon: UsersIcon, current: false },
 ];
-
+const navigationOffline = [
+    { name: "Drivers and Monoposts", href: "/data-input", icon: AdjustmentsHorizontalIcon, current: true },
+    { name: "Advance Charts", href: "/offline-advance-charts", icon: UsersIcon, current: false },
+    // { name: "Longer charts", href: "/longer-charts", icon: UsersIcon, current: false },
+];
 function classNames(...classes) {
     return classes.filter(Boolean).join(" ");
 }

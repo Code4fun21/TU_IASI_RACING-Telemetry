@@ -164,9 +164,7 @@ export default function Dashboard() {
   }, [selectedLap, selectedTs, gatesArray]);
 
   const filtered = useMemo(() => {
-    console.log("Data from backend",allSeries)
     if (startSec == null || endSec == null) return allSeries;
-
     return Object.fromEntries(
       Object.entries(allSeries).map(([key, series]) => [
         key,
@@ -175,7 +173,6 @@ export default function Dashboard() {
           : series.filter(([ts]) => ts >= startSec && ts <= endSec),
       ])
     );
-    
   }, [allSeries, startSec, endSec]);
 
   const mapData = useMemo(() => {
@@ -193,7 +190,7 @@ export default function Dashboard() {
 
   const timeStamps = (arr) => arr.map(([ts]) => ts * 1000);
   const makeSeries = (arr, name, unit) => ({ name, data: arr.map(([, v]) => v), unit });
-
+// useEffect(()=>{console.log(filtered.Gates_times)},[filtered])
   // Distance charts
   const haversine = (lat1, lon1, lat2, lon2) => {
     const toRad = (deg) => (deg * Math.PI) / 180;
@@ -470,7 +467,7 @@ const clearChart   = () => setCommitted([]);
     <AutoPairChart
       align="base-fastest"
       alignMethod="linear"
-      toleranceMs={1000}
+      toleranceMs={800}
       series={committed.map((label) => ({
         name: label,
         unit: signalsCatalog[label].unit,

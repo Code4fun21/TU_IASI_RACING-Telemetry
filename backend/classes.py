@@ -636,14 +636,26 @@ class CSV_Tables:
                     _process_row(row)
 
             def _process_row(row):
+<<<<<<< HEAD
                 t_str = row[0].strip()
+=======
+                # row: [time, id_hex, payload]
+                time = row[0].strip()
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
                 try:
                     _id = int(row[1].strip(), 16)
                 except Exception:
                     return
                 aux  = self.get_aditional_data(_id)
                 data = self.sep_data(row[2])
+<<<<<<< HEAD
                 self.create_el(_id, aux, data, t_str)  # emits GPSPoint only if id==279
+=======
+                self.create_el(_id, aux, data, time)  # will emit GPSPoint only if id==279
+
+            with open(self.__csv_files[file], mode='r', newline='',encoding="utf-8", errors="replace") as openedFile:
+                reader = csv.reader(openedFile)
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
 
             with open(self.__csv_files[file], mode='r', newline='', encoding="utf-8", errors="replace") as f:
                 reader = csv.reader(f)
@@ -673,6 +685,7 @@ class CSV_Tables:
 
     def create_el(self, id, aux, data, time):
         if aux[1]:
+<<<<<<< HEAD
             start = 0
             length = len(aux[1])
             car_point = []
@@ -683,6 +696,20 @@ class CSV_Tables:
                     if id == 279:
                         car_point.append(converted[1])
                 start += aux[0][i]
+=======
+            start=0
+            length=len(aux[1])
+            car_point=[]
+            for i in range(0,length):
+                el=aux[1][i]
+                if el !=0: 
+                    convertedData=self.convert_data(id,i,data[start:start+aux[0][i]],aux[1][i],time)
+
+                    self.add_to_tabel(id,i,convertedData[0])
+                    if id==279:
+                        car_point.append(convertedData[1])
+                start+=aux[0][i]
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
 
             if id == 279 and len(car_point) > 2:
                 car_point.append(float(time))
@@ -695,10 +722,19 @@ class CSV_Tables:
         if not signal_name:
             return
         if isinstance(data, dict):
+<<<<<<< HEAD
             df_old = self._s(signal_name)
             data_df = pd.DataFrame([data])
             new_df = df_old if data_df.dropna(how="all").empty else pd.concat([df_old, data_df], ignore_index=True)
             self._set_s(signal_name, new_df)
+=======
+            data = pd.DataFrame([data])  
+            if not data.empty and not data.dropna(how="all").empty:
+                new_df = pd.concat([df, data], ignore_index=True)
+            else:
+                new_df = df
+            setattr(self, f"_{self.__class__.__name__}__{signal_name}", new_df)
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
 
     def __get_signal_name(self, id, index):
         signal_map = {
@@ -760,13 +796,24 @@ class CSV_Tables:
         return (fahrenheit - 32) * 5 / 9
 
     def _series_dict_from_df(self, df: pd.DataFrame, time_col: str, value_col: str) -> dict:
+<<<<<<< HEAD
         if df is None or df.empty:
             return {}
+=======
+        """
+        Turn columns Time + value_col into {Time: value}
+        Time will be stringified as the dict key (JS Object keys are strings anyway).
+        """
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
         out = {}
         t_arr = df[time_col].astype(float).to_numpy()
         v_arr = df[value_col].astype(float).to_numpy()
         for t, v in zip(t_arr, v_arr):
+<<<<<<< HEAD
             out[str(t)] = float(v)
+=======
+            out[str(t)] = v
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
         return out
 
     def _pre_smooth(self, df, window=5):
@@ -858,6 +905,7 @@ class CSV_Tables:
 
         payload = {}
 
+<<<<<<< HEAD
         # simple signals
         simple_keys = [
             "RPM", "ECU_time", "Main_pulsewidth_bank1", "Main_pulsewidth_bank2",
@@ -875,6 +923,78 @@ class CSV_Tables:
         ]
         for k in simple_keys:
             payload[k] = self.as_map(k)
+=======
+        # ----- build final payload -----
+        return {
+            "RPM": self.__RPM.dropna().astype(float).to_dict(),
+            "ECU_time": self.__ECU_time.dropna().astype(float).to_dict(),
+            "Main_pulsewidth_bank1": self.__Main_pulsewidth_bank1.dropna().astype(float).to_dict(),
+            "Main_pulsewidth_bank2": self.__Main_pulsewidth_bank2.dropna().astype(float).to_dict(),
+
+            "Manifold_air_pressure": self.__Manifold_air_pressure.dropna().astype(float).to_dict(),
+            "Manifold_air_temperature": self.__Manifold_air_temperature.dropna().astype(float).to_dict(),
+            "Coolant_temperature": self.__Coolant_temperature.dropna().astype(float).to_dict(),
+
+            "Throttle_position": self.__Throttle_position.dropna().astype(float).to_dict(),
+            "Battery_voltage": self.__Battery_voltage.dropna().astype(float).to_dict(),
+            "Air_density_correction": self.__Air_density_correction.dropna().astype(float).to_dict(),
+            "Warmup_correction": self.__Warmup_correction.dropna().astype(float).to_dict(),
+            "TPS_based_acceleration": self.__TPS_based_acceleration.dropna().astype(float).to_dict(),
+            "TPS_based_fuel_cut": self.__TPS_based_fuel_cut.dropna().astype(float).to_dict(),
+            "Total_fuel_correction": self.__Total_fuel_correction.dropna().astype(float).to_dict(),
+            "VE_value_table_bank1": self.__VE_value_table_bank1.dropna().astype(float).to_dict(),
+            "VE_value_table_bank2": self.__VE_value_table_bank2.dropna().astype(float).to_dict(),
+            "Cold_advance": self.__Cold_advance.dropna().astype(float).to_dict(),
+            "Rate_of_change_of_TPS": self.__Rate_of_change_of_TPS.dropna().astype(float).to_dict(),
+            "Rate_of_change_of_RPM": self.__Rate_of_change_of_RPM.dropna().astype(float).to_dict(),
+            "Sync_loss_counter": self.__Sync_loss_counter.dropna().astype(float).to_dict(),
+            "Sync_loss_reason_code": self.__Sync_loss_reason_code.dropna().astype(float).to_dict(),
+            "Average_fuel_flow": self.__Average_fuel_flow.dropna().astype(float).to_dict(),
+
+            "Damper_Left_Rear": self.__Damper_Left_Rear.dropna().astype(float).to_dict(),
+            "Damper_Right_Rear": self.__Damper_Right_Rear.dropna().astype(float).to_dict(),
+            "Gear": self.__Gear.dropna().astype(float).to_dict(),
+            "Brake_Pressure": self.__Brake_Pressure.dropna().astype(float).to_dict(),
+            "BSPD": self.__BSPD.dropna().astype(float).to_dict(),
+
+            "Roll": self.__Roll.dropna().astype(float).to_dict(),
+            "Pitch": self.__Pitch.dropna().astype(float).to_dict(),
+            "Yaw": self.__Yaw.dropna().astype(float).to_dict(),
+
+            "Damper_Left_Front": self.__Damper_Left_Front.dropna().astype(float).to_dict(),
+            "Damper_Right_Front": self.__Damper_Right_Front.dropna().astype(float).to_dict(),
+            "Steering_Angle": self.__Steering_Angle.dropna().astype(float).to_dict(),
+
+            # GPS arrays go out as arrays (frontend uses them directly)
+            "GPS_Latitude": self.__GPS_Latitude.dropna().astype(float).to_numpy().tolist(),
+            "GPS_Longitude": self.__GPS_Longitude.dropna().astype(float).to_numpy().tolist(),
+            "GPS_Speed": self.__GPS_Speed.dropna().astype(float).to_numpy().tolist(),
+
+            # IMU (what frontend already expects)
+            "Acceleration_on_X_axis": Accel_X_dict,
+            "Acceleration_on_Y_axis": Accel_Y_dict,
+            "Acceleration_on_Z_axis": Accel_Z_dict,
+
+            "Gyroscope_on_X_axis": Gyro_X_dict,
+            "Gyroscope_on_Y_axis": Gyro_Y_dict,
+            "Gyroscope_on_Z_axis": Gyro_Z_dict,
+
+            # Optional bonus channels if you want to use them later:
+            "Velocity_on_X_axis": Vel_X_dict,
+            "Velocity_on_Y_axis": Vel_Y_dict,
+            "Velocity_on_Z_axis": Vel_Z_dict,
+
+            "Angle_on_X_axis": Angle_X_dict,
+            "Angle_on_Y_axis": Angle_Y_dict,
+            "Angle_on_Z_axis": Angle_Z_dict,
+
+            "Gates_times": gates,
+
+            "GPS_Latitude_counter": len(self.__GPS_Latitude.dropna()),
+            "GPS_Longitude_counter": len(self.__GPS_Longitude.dropna()),
+            "GPS_Speed_counter": len(self.__GPS_Speed.dropna()),
+        }
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict)
 
         # IMU exports
         payload["Acceleration_on_X_axis"] = Accel_X_dict

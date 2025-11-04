@@ -54,6 +54,7 @@
         "sessionId": 11,
         "date": "2025-10-21",
         "time": "15:56:31"
+<<<<<<< HEAD:backend/data_static/sessions.json
     },
     {
         "csvFile": "C:\\Users\\ailoa\\Documents\\GitHub\\TU_IASI_RACING-Telemetry\\filtered_id5F0.csv",
@@ -89,5 +90,7 @@
         "sessionId": 16,
         "date": "2025-11-04",
         "time": "10:18:48"
+=======
+>>>>>>> parent of 36ef3f8d (updates on backend: decode and to_dict):backend/sessions.json
     }
 ]
