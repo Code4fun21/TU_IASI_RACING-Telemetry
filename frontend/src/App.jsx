@@ -29,7 +29,7 @@ function App() {
                             <Route path="monopost-info" element={<MonopostInfoPage />} />
                             <Route path="live-dashboard" element={<LiveDashboard />} />
                             <Route path="data-input" element={<DataInput />} />
-                            <Route path="live-advance-charts" element={<LiveAdvanceCharts />} />
+                            <Route path="offline-data" element={<Dashboard />} />
                             <Route path="offline-advance-charts" element={<AdvanceChartsOffline />} />
                         </Route>
                         <Route path="offline-files" element={<OfflineFiles />} />

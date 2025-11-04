@@ -708,6 +708,7 @@ class CSV_Tables:
 
             def _process_row(row):
                 # row: [time, id_hex, payload]
+                
                 time = row[0].strip()
                 try:
                     _id = int(row[1].strip(), 16)   # e.g. "117" -> 279
@@ -715,6 +716,7 @@ class CSV_Tables:
                     return
                 aux  = self.get_aditional_data(_id)
                 data = self.sep_data(row[2])
+                
                 self.create_el(_id, aux, data, time)  # will emit GPSPoint only if id==279
 
             with open(self.__csv_files[file], mode='r', newline='',encoding="utf-8", errors="replace") as openedFile:
@@ -766,7 +768,6 @@ class CSV_Tables:
                 el=aux[1][i]
                 if el !=0: 
                     convertedData=self.convert_data(id,i,data[start:start+aux[0][i]],aux[1][i],time)
-
                     self.add_to_tabel(id,i,convertedData[0])
                     if id==279:
                         car_point.append(convertedData[1])
@@ -791,6 +792,7 @@ class CSV_Tables:
             else:
                 new_df = df
             setattr(self, f"_{self.__class__.__name__}__{signal_name}", new_df)
+            
 
     def __get_signal_name(self, id, index):
         signal_map = {
@@ -858,12 +860,16 @@ class CSV_Tables:
         Turn columns Time + value_col into {Time: value}
         Time will be stringified as the dict key (JS Object keys are strings anyway).
         """
-        out = {}
-        t_arr = df[time_col].astype(float).to_numpy()
-        v_arr = df[value_col].astype(float).to_numpy()
-        for t, v in zip(t_arr, v_arr):
-            out[str(t)] = v
-        return out
+        
+        if not df.empty:
+            out = {}
+            t_arr = df[time_col].astype(float).to_numpy()
+            v_arr = df[value_col].astype(float).to_numpy()
+            for t, v in zip(t_arr, v_arr):
+                out[str(t)] = v
+            return out
+        else:
+            return df
 
     def _pre_smooth(self, df, window=5):
         if df is None or df.empty:
@@ -982,45 +988,53 @@ class CSV_Tables:
             Angle_Z_dict = {}
 
         # ----- build final payload -----
+
+        def _as_map(df):
+            return self._series_dict_from_df(df, "Time", "data")
+
         return {
-            "RPM": self.__RPM.dropna().astype(float).to_dict(),
-            "ECU_time": self.__ECU_time.dropna().astype(float).to_dict(),
-            "Main_pulsewidth_bank1": self.__Main_pulsewidth_bank1.dropna().astype(float).to_dict(),
-            "Main_pulsewidth_bank2": self.__Main_pulsewidth_bank2.dropna().astype(float).to_dict(),
+        # engine/ecu
+            "RPM": self._series_dict_from_df(self.__RPM, "Time", "data"),
+            "ECU_time": self._series_dict_from_df(self.__ECU_time, "Time", "data"),
+            "Main_pulsewidth_bank1": self._series_dict_from_df(self.__Main_pulsewidth_bank1, "Time", "data"),
+            "Main_pulsewidth_bank2": self._series_dict_from_df(self.__Main_pulsewidth_bank2, "Time", "data"),
 
-            "Manifold_air_pressure": self.__Manifold_air_pressure.dropna().astype(float).to_dict(),
-            "Manifold_air_temperature": self.__Manifold_air_temperature.dropna().astype(float).to_dict(),
-            "Coolant_temperature": self.__Coolant_temperature.dropna().astype(float).to_dict(),
+            # 5F2
+            "Manifold_air_pressure": self._series_dict_from_df(self.__Manifold_air_pressure, "Time", "data"),
+            "Manifold_air_temperature": self._series_dict_from_df(self.__Manifold_air_temperature, "Time", "data"),
+            "Coolant_temperature": self._series_dict_from_df(self.__Coolant_temperature, "Time", "data"),
 
-            "Throttle_position": self.__Throttle_position.dropna().astype(float).to_dict(),
-            "Battery_voltage": self.__Battery_voltage.dropna().astype(float).to_dict(),
-            "Air_density_correction": self.__Air_density_correction.dropna().astype(float).to_dict(),
-            "Warmup_correction": self.__Warmup_correction.dropna().astype(float).to_dict(),
-            "TPS_based_acceleration": self.__TPS_based_acceleration.dropna().astype(float).to_dict(),
-            "TPS_based_fuel_cut": self.__TPS_based_fuel_cut.dropna().astype(float).to_dict(),
-            "Total_fuel_correction": self.__Total_fuel_correction.dropna().astype(float).to_dict(),
-            "VE_value_table_bank1": self.__VE_value_table_bank1.dropna().astype(float).to_dict(),
-            "VE_value_table_bank2": self.__VE_value_table_bank2.dropna().astype(float).to_dict(),
-            "Cold_advance": self.__Cold_advance.dropna().astype(float).to_dict(),
-            "Rate_of_change_of_TPS": self.__Rate_of_change_of_TPS.dropna().astype(float).to_dict(),
-            "Rate_of_change_of_RPM": self.__Rate_of_change_of_RPM.dropna().astype(float).to_dict(),
-            "Sync_loss_counter": self.__Sync_loss_counter.dropna().astype(float).to_dict(),
-            "Sync_loss_reason_code": self.__Sync_loss_reason_code.dropna().astype(float).to_dict(),
-            "Average_fuel_flow": self.__Average_fuel_flow.dropna().astype(float).to_dict(),
+            # 5F3
+            "Throttle_position": self._series_dict_from_df(self.__Throttle_position, "Time", "data"),
+            "Battery_voltage": self._series_dict_from_df(self.__Battery_voltage, "Time", "data"),
 
-            "Damper_Left_Rear": self.__Damper_Left_Rear.dropna().astype(float).to_dict(),
-            "Damper_Right_Rear": self.__Damper_Right_Rear.dropna().astype(float).to_dict(),
-            "Gear": self.__Gear.dropna().astype(float).to_dict(),
-            "Brake_Pressure": self.__Brake_Pressure.dropna().astype(float).to_dict(),
-            "BSPD": self.__BSPD.dropna().astype(float).to_dict(),
+            # 5F4..5F7
+            "Air_density_correction": self._series_dict_from_df(self.__Air_density_correction, "Time", "data"),
+            "Warmup_correction": self._series_dict_from_df(self.__Warmup_correction, "Time", "data"),
+            "TPS_based_acceleration": self._series_dict_from_df(self.__TPS_based_acceleration, "Time", "data"),
+            "TPS_based_fuel_cut": self._series_dict_from_df(self.__TPS_based_fuel_cut, "Time", "data"),
+            "Total_fuel_correction": self._series_dict_from_df(self.__Total_fuel_correction, "Time", "data"),
+            "VE_value_table_bank1": self._series_dict_from_df(self.__VE_value_table_bank1, "Time", "data"),
+            "VE_value_table_bank2": self._series_dict_from_df(self.__VE_value_table_bank2, "Time", "data"),
+            "Cold_advance": self._series_dict_from_df(self.__Cold_advance, "Time", "data"),
+            "Rate_of_change_of_TPS": self._series_dict_from_df(self.__Rate_of_change_of_TPS, "Time", "data"),
+            "Rate_of_change_of_RPM": self._series_dict_from_df(self.__Rate_of_change_of_RPM, "Time", "data"),
 
-            "Roll": self.__Roll.dropna().astype(float).to_dict(),
-            "Pitch": self.__Pitch.dropna().astype(float).to_dict(),
-            "Yaw": self.__Yaw.dropna().astype(float).to_dict(),
+            # 61B / 624
+            "Sync_loss_counter": self._series_dict_from_df(self.__Sync_loss_counter, "Time", "data"),
+            "Sync_loss_reason_code": self._series_dict_from_df(self.__Sync_loss_reason_code, "Time", "data"),
+            "Average_fuel_flow": self._series_dict_from_df(self.__Average_fuel_flow, "Time", "data"),
 
-            "Damper_Left_Front": self.__Damper_Left_Front.dropna().astype(float).to_dict(),
-            "Damper_Right_Front": self.__Damper_Right_Front.dropna().astype(float).to_dict(),
-            "Steering_Angle": self.__Steering_Angle.dropna().astype(float).to_dict(),
+            # chassis
+            "Damper_Left_Rear": self._series_dict_from_df(self.__Damper_Left_Rear, "Time", "data"),
+            "Damper_Right_Rear": self._series_dict_from_df(self.__Damper_Right_Rear, "Time", "data"),
+            "Damper_Left_Front": self._series_dict_from_df(self.__Damper_Left_Front, "Time", "data"),
+            "Damper_Right_Front": self._series_dict_from_df(self.__Damper_Right_Front, "Time", "data"),
+            "Gear": self._series_dict_from_df(self.__Gear, "Time", "data"),
+            "Brake_Pressure": self._series_dict_from_df(self.__Brake_Pressure, "Time", "data"),
+            "BSPD": self._series_dict_from_df(self.__BSPD, "Time", "data"),
+            "Steering_Angle": self._series_dict_from_df(self.__Steering_Angle, "Time", "data"),
+        
 
             # GPS arrays go out as arrays (frontend uses them directly)
             "GPS_Latitude": self.__GPS_Latitude.dropna().astype(float).to_numpy().tolist(),

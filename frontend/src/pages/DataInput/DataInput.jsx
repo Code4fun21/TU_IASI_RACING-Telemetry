@@ -26,12 +26,7 @@ export default function DataInput() {
                 </div>
             </div>
 
-            {/* Timestamps */}
-            <div className="overflow-hidden bg-white shadow-sm sm:rounded-lg mt-6">
-                <div className="px-4 py-5 sm:p-6">
-                    <TimestampsTable />
-                </div>
-            </div>
+           
         </div>
     );
 }
