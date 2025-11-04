@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv() 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
@@ -21,10 +23,19 @@ import math
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 import heapq
+try:
+    from lttb import lttb
+    _HAS_LTTB = True
+except Exception:
+    _HAS_LTTB = False
+import ssl
+from typing import Callable, Optional
 
 import servert_test
 from start_point import GPS_Intersection
 import database
+import os
+import r2_storage as r2
 
 @dataclass
 class GPSPoint:
@@ -36,31 +47,28 @@ class GPSPoint:
 
 class App:
     def __init__(self):
-        # 1) Instantiate WS server
         self.__webObj = servert_test.WebSocketServer()
 
-        # 2) Define the lifespan context
         @asynccontextmanager
         async def lifespan(app: FastAPI):
-            # before the app starts:
             await self.__webObj.start_websocket()
             yield
-            # after the app shuts down:
             await self.__webObj.stop_websocket()
 
-        # 3) Create FastAPI with our lifespan
         self.__app = FastAPI(lifespan=lifespan)
 
-        # 4) Add middleware (only once!)
         self.__app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+        CORSMiddleware,
+        allow_origins=[
+            "https://your-site.pages.dev",
+            # add dev host if testing locally:
+            "http://localhost:5173",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-        # 5) Your other attributes
         self.__mqtt = None
         self.__csv = None
         self.__tables = []
@@ -69,172 +77,179 @@ class App:
         self.__gates_list = None
         self.__connection = None
 
-        # 6) Now register your routes
         self.create_routes()
 
     def create_routes(self):
-        self.__app.add_api_route("/telemetry/connect", self.create_mqtt, methods=["POST"])
-        self.__app.add_api_route("/create-csv", self.create_csv, methods=["POST"])
-        self.__app.add_api_route("/get-table", self.get_table_data, methods=["GET"])
-        self.__app.add_api_route("/create-table", self.create_tables, methods=["GET"])
-        self.__app.add_api_route("/debug", self.debug, methods=["GET"])
-        self.__app.add_api_route("/save-gates", self.save_gates, methods=["POST"])
-        self.__app.add_api_route("/get-csv-files", self.get_csv_files, methods=["GET"])
+        api = self.__app.add_api_route
 
-        self.__app.add_api_route("/api/drivers", database.add_driver, methods=["POST"])
-        self.__app.add_api_route("/api/drivers/{id}", database.get_driver, methods=["GET"])
-        self.__app.add_api_route("/api/drivers", database.get_all_drivers, methods=["GET"])
+        api("/telemetry/connect", self.create_mqtt, methods=["POST"])
+        api("/create-csv", self.create_csv, methods=["POST"])
+        api("/get-table", self.get_table_data, methods=["GET"])
+        api("/create-table", self.create_tables, methods=["GET"])
+        # api("/debug", self.debug, methods=["GET"])
+        api("/save-gates", self.save_gates, methods=["POST"])
+        api("/get-csv-files", self.get_csv_files, methods=["GET"])
+        self.__app.add_api_route("/telemetry/disconnect", self.disconnect_all, methods=["POST"])
 
-        self.__app.add_api_route("/api/tracks", database.add_track, methods=["POST"])
-        self.__app.add_api_route("/api/tracks/{id}", database.get_track, methods=["GET"])
-        self.__app.add_api_route("/api/tracks", database.get_all_tracks, methods=["GET"])
+        api("/api/drivers", database.add_driver, methods=["POST"])
+        api("/api/drivers/{id}", database.get_driver, methods=["GET"])
+        api("/api/drivers", database.get_all_drivers, methods=["GET"])
 
-        self.__app.add_api_route("/api/monoposts", database.add_car, methods=["POST"])
-        self.__app.add_api_route("/api/monoposts/{id}", database.get_car, methods=["GET"])
-        self.__app.add_api_route("/api/monoposts", database.get_all_cars, methods=["GET"])
+        api("/api/tracks", database.add_track, methods=["POST"])
+        api("/api/tracks/{id}", database.get_track, methods=["GET"])
+        api("/api/tracks", database.get_all_tracks, methods=["GET"])
 
-        self.__app.add_api_route("/api/timestamps", database.add_timestemp, methods=["POST"])
-        self.__app.add_api_route("/api/timestamps/{column}",database.get_timestemp,methods=["GET"])
-        self.__app.add_api_route("/api/timestamps", database.get_all_timestemps, methods=["GET"])
+        api("/api/monoposts", database.add_car, methods=["POST"])
+        api("/api/monoposts/{id}", database.get_car, methods=["GET"])
+        api("/api/monoposts", database.get_all_cars, methods=["GET"])
 
-        self.__app.add_api_route("/api/sessions", database.add_session, methods=["POST"])
-        self.__app.add_api_route("/api/sessions/{id}", database.get_session, methods=["GET"])
-        self.__app.add_api_route("/api/sessions", database.get_all_session, methods=["GET"])
+        api("/api/timestamps", database.add_timestemp, methods=["POST"])
+        api("/api/timestamps/{column}", database.get_timestemp, methods=["GET"])
+        api("/api/timestamps", database.get_all_timestemps, methods=["GET"])
 
+        api("/api/sessions", database.add_session, methods=["POST"])
+        api("/api/sessions/{id}", database.get_session, methods=["GET"])
+        api("/api/sessions", database.get_all_session, methods=["GET"])
+        
+
+
+    
     async def get_csv_files(self):
-        # path to /backend/data_files
         data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_files")
-
         csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
 
-        csv_files_info = [
-            {
-                "filename": os.path.basename(file),
-                "last_modified": datetime.fromtimestamp(os.path.getmtime(file)).strftime('%Y-%m-%d %H:%M:%S')
-            }
-            for file in csv_files
-        ]
+        return {
+            "csv_files": [
+                {
+                    "filename": os.path.basename(f),
+                    "last_modified": datetime.fromtimestamp(os.path.getmtime(f)).strftime('%Y-%m-%d %H:%M:%S')
+                }
+                for f in csv_files
+            ]
+        }
 
-        return {"csv_files": csv_files_info}
+    async def disconnect_all(self):
+        """
+        External API to stop MQTT + WS and clean internal state.
+        """
+        # Stop MQTT/WebSocket if the live connection exists
+        if self.__connection:
+            try:
+                await self.__connection.shutdown()
+            except Exception as e:
+                print(f"[App.disconnect_all] shutdown failed: {e}")
+
+        # Extra safety: stop App-owned WebSocket server too
+        try:
+            await self.__webObj.stop_websocket()
+        except Exception:
+            pass
+
+        # Reset local state
+        await self.clean_up()
+        return {"message": "Telemetry disconnected (MQTT + WebSocket closed)."}
 
     async def save_gates(self, request: Request):
         data = await request.json()
         circuit = data["circuit"]
         gates_list = data["gates"]
-        gates_json = [
-            {
-                "name": f"S{i}",
-                "lat1": gate[0],
-                "lon1": gate[1],
-                "lat2": gate[2],
-                "lon2": gate[3]
-            }
-            for i, gate in enumerate(gates_list)
-        ]
-        with open(f"{circuit}_gates.json", "w") as file:
-            json.dump(gates_json, file, indent=4)
 
-    async def debug(self):
-        return {
-            "mqtt": int(self.__mqtt is not None),
-            "csv": int(self.__csv is not None)
-        }
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_files")
+        os.makedirs(data_dir, exist_ok=True)
+
+        with open(os.path.join(data_dir, f"{circuit}_gates.json"), "w", encoding="utf-8") as f:
+            json.dump(gates_list, f, indent=4)
+
+        return {"message": "gates saved"}
 
     async def clean_up(self):
         self.__gates_list = None
         self.__mainCoor = []
-        if self.__csv:
-            self.__csv.__del__
-            self.__csv = None
-        # if self.__webObj:
-        #     print("Stopping socket...")
-        #     await self.__webObj.stop_websocket()
+
         if self.__connection:
             await self.__connection.stop_socket()
-            self.__connection=None
-        if self.__mqtt:
-            self.__mqtt.__del__
-            self.__mqtt = None
+            self.__connection = None
 
-        for table in self.__tables:
-            if table:
-                table.__del__
-        self.__connection = None
+        for t in self.__tables:
+            del t
+        self.__tables = []
+
+        if self.__csv:
+            del self.__csv
+            self.__csv = None
+
+        if self.__mqtt:
+            del self.__mqtt
+            self.__mqtt = None
 
     def get_gates_array(self, file):
         try:
-            with open(file, mode='r') as openedFile:
-                data = json.load(openedFile)
-                for gate in data:
-                    gl = GPSPoint(gate["lat1"], gate["lon1"], -1, -1)
-                    gr = GPSPoint(gate["lat2"], gate["lon2"], -1, -1)
-                    self.__gates[f"{gate['name']}"] = GPS_Intersection(gl, gr)
+            with open(file, mode='r') as f:
+                for gate in json.load(f):
+                    self.__gates[gate["name"]] = GPS_Intersection(
+                        GPSPoint(gate["lat1"], gate["lon1"], -1, -1),
+                        GPSPoint(gate["lat2"], gate["lon2"], -1, -1)
+                    )
         except Exception as e:
-            return {"Error": str(e)}
+            print("Error loading gates:", e)
 
     async def create_csv(self, request: Request):
         await self.clean_up()
         data = await request.json()
+
         files = data["files"].split(",")
         self.__gates_list = data["gates"]
-        coorStr = data["trackCoordonates"]
-        coorArray = coorStr.split(",")
-        self.__mainCoor = [int(coorArray[0]), int(coorArray[1])]
-        if self.__csv:
-            return {"Error": "CSV object already exists"}
+
+        lat, lon = map(int, data["trackCoordonates"].split(","))
+        self.__mainCoor = [lat, lon]
+
         self.get_gates_array(self.__gates_list)
         self.__csv = CSV(self.__gates, self.__mainCoor, self.__tables, self.__app)
+
         for file in files:
             await self.__csv.add_file(file)
 
+        return {"message": "CSV loaded"}
+
     async def create_tables(self, file_no: int):
-        if not self.__csv:
-            return {"Error": "CSV instance not initialized"}
-        if file_no >= len(self.__csv.get_files()):
-            return {"Error": "Invalid file number"}
+        if not self.__csv or file_no >= len(self.__csv.get_files()):
+            return {"Error": "Invalid request"}
+
         table = CSV_Tables(self.__csv)
         await table.add_data_from(file_no)
         self.__tables.append(table)
-        return {"Message": f"Table created for file index {file_no}","tables":table.get_data()}
+        return {"Message": f"Table created for file {file_no}", "tables": table.get_data()}
 
     async def get_table_data(self, file_no: int):
         if file_no >= len(self.__tables):
             return {"Error": "Invalid table index"}
-        return {"Message": "yes", "Data": self.__tables[file_no].get_data()}
+        return {"Data": self.__tables[file_no].get_data()}
 
     async def create_mqtt(self, request: Request):
         data = await request.json()
+        await self.clean_up()
 
-        # Clean existing connection
-        if self.__mqtt:
-            print("Cleaning up existing MQTT...")
-            await self.clean_up()
-            if self.__connection:
-                await self.__connection.stop_socket()
-
-        broker = data["broker"]
-        port = int(data["port"])
-        topic = data["topic"]
-        client_id = data["clientId"]
         track = await database.get_track(data["trackId"])
         self.__gates_list = track["gates"]
 
-        self.get_gates_array(self.__gates_list)
-        coorStr = track["trackCoordonates"]
-        coorArray = coorStr.split(",")
-        self.__mainCoor = [int(coorArray[0]), int(coorArray[1])]
+        lat, lon = map(int, track["trackCoordonates"].split(","))
+        self.__mainCoor = [lat, lon]
 
-        self.create_mqtt_instance(self.__gates, self.__mainCoor, broker, port, topic, client_id)
+        self.get_gates_array(self.__gates_list)
+
+        self.__mqtt = MQTT(self.__app, self.__gates, self.__mainCoor,
+                           data["broker"], int(data["port"]),
+                           data["topic"], data["clientId"])
+
         await self.__webObj.start_websocket()
         await self.__mqtt.connect_to_mqtt()
-        self.__connection = MQTT_Tables(self.__mqtt, self.__webObj,data["fileName"])
-        return {"Message": "MQTT object created"}
 
-    def create_mqtt_instance(self, gates, mainCoor, broker, port, topic, client_id):
-        self.__mqtt = MQTT(self.__app, gates, mainCoor, broker, port, topic, client_id)
+        self.__connection = MQTT_Tables(self.__mqtt, self.__webObj, data["fileName"])
+        return {"Message": "MQTT started"}
 
     def get_app(self):
         return self.__app
+
 
 
 
@@ -242,42 +257,41 @@ class App:
 
 
 class CSV:
-    def __init__(self,corners,mainCoordinates,tables, app: FastAPI):
-        self.__app = app
-        self.__files = []
-        self.__tables=tables
-        self.__gates=corners
-        self.__mainCoor=mainCoordinates
-        self.create_routes()
+    def __init__(self, gates, main_coordinates, tables, app: FastAPI):
+        self._app = app
+        self._files = []
+        self._tables = tables              # reference shared table store
+        self._gates = gates
+        self._main_coordinates = main_coordinates
 
-    def create_routes(self):
-        self.__app.add_api_route("/get-files",self.get_files,methods=["GET"])
+        # ⚠️ only register route once (global), not every time CSV instance is made
+        if not hasattr(self._app.state, "csv_routes_registered"):
+            self._app.add_api_route("/get-files", self.get_files, methods=["GET"])
+            self._app.state.csv_routes_registered = True
 
-    
-    async def add_file(self,path):
-        if not path in self.__files:
-            self.__files.append(path)
-            self.__tables.append(None)
-    
+    async def add_file(self, path: str):
+        """Register CSV file name for processing."""
+        path = path.strip()
+        if path and path not in self._files:
+            self._files.append(path)
+            self._tables.append(None)
+
     def get_files(self):
-        return self.__files
-    
-    def get_app(self):
-        return self.__app
+        """Return list of registered CSV file names."""
+        return list(self._files)  # return a copy for safety
 
-    def get_corners(self):
-        return self.__corners
-            
     def get_gates(self):
-        return self.__gates
-    
-    def get_main_coordinates(self):
-        return self.__mainCoor
+        return self._gates
 
-    def __del__(self):
-        print("Destructor called for CSV")
-        self.__app=None
-        self.__files=[]      
+    def get_main_coordinates(self):
+        return self._main_coordinates
+
+    # ❌ Don't rely on __del__
+    def cleanup(self):
+        """Called by App.clean_up()"""
+        self._files.clear()
+
+
 
 
 
@@ -298,78 +312,55 @@ class CSV_Tables:
     # Optional bias removal (first N samples assumed stationary). 0 = disabled.
     __IMU_BIAS_SAMPLES = 25
 
-    def __init__(self,csv_class: "CSV"):
-        self.__app=csv_class.get_app()
-        self.__csv_files=csv_class.get_files()
+    def __init__(self, csv_class: "CSV"):
+        # self.__app        = csv_class.get_app()
+        self.__csv_files  = csv_class.get_files()
 
-        self.__RPM = pd.DataFrame(columns=["Time", "data"])
-        self.__ECU_time = pd.DataFrame(columns=["Time", "data"])
-        self.__Main_pulsewidth_bank1 = pd.DataFrame(columns=["Time", "data"])
-        self.__Main_pulsewidth_bank2 = pd.DataFrame(columns=["Time", "data"])
-        
-        self.__Manifold_air_pressure = pd.DataFrame(columns=["Time", "data"])
-        self.__Manifold_air_temperature = pd.DataFrame(columns=["Time", "data"])
-        self.__Coolant_temperature = pd.DataFrame(columns=["Time", "data"])
-        
-        self.__Throttle_position = pd.DataFrame(columns=["Time", "data"])
-        self.__Battery_voltage = pd.DataFrame(columns=["Time", "data"])
-        
-        self.__Air_density_correction = pd.DataFrame(columns=["Time", "data"])
+        # store as instance field (not local var)
+        self.SIGNAL_KEYS = [
+            # engine/ecu
+            "RPM", "ECU_time", "Main_pulsewidth_bank1", "Main_pulsewidth_bank2",
+            # 5F2
+            "Manifold_air_pressure", "Manifold_air_temperature", "Coolant_temperature",
+            # 5F3
+            "Throttle_position", "Battery_voltage",
+            # 5F4..5F7
+            "Air_density_correction", "Warmup_correction", "TPS_based_acceleration",
+            "TPS_based_fuel_cut", "Total_fuel_correction", "VE_value_table_bank1",
+            "VE_value_table_bank2", "Cold_advance", "Rate_of_change_of_TPS",
+            "Rate_of_change_of_RPM",
+            # 61B / 624
+            "Sync_loss_counter", "Sync_loss_reason_code", "Average_fuel_flow",
+            # chassis
+            "Damper_Left_Rear", "Damper_Right_Rear", "Gear",
+            "Brake_Pressure", "BSPD",
+            "Damper_Left_Front", "Damper_Right_Front", "Steering_Angle",
+            # GPS
+            "GPS_Latitude", "GPS_Longitude", "GPS_Speed",
+            # IMU
+            "Acceleration_on_X_axis", "Acceleration_on_Y_axis", "Acceleration_on_Z_axis",
+            "Gyroscope_on_X_axis", "Gyroscope_on_Y_axis", "Gyroscope_on_Z_axis",
+            # optional computed roll/pitch/yaw if you ever add them
+            "Roll", "Pitch", "Yaw",
+        ]
 
-        self.__Warmup_correction = pd.DataFrame(columns=["Time", "data"])        
-        self.__TPS_based_acceleration = pd.DataFrame(columns=["Time", "data"])
-        self.__TPS_based_fuel_cut = pd.DataFrame(columns=["Time", "data"])
+        # Single storage dict for all signals -> DataFrame(Time, data)
+        self._series: dict[str, pd.DataFrame] = {
+            k: pd.DataFrame(columns=["Time", "data"]) for k in self.SIGNAL_KEYS
+        }
 
-        self.__Total_fuel_correction = pd.DataFrame(columns=["Time", "data"])        
-        self.__VE_value_table_bank1 = pd.DataFrame(columns=["Time", "data"])
-        self.__VE_value_table_bank2 = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Cold_advance = pd.DataFrame(columns=["Time", "data"])        
-        self.__Rate_of_change_of_TPS = pd.DataFrame(columns=["Time", "data"])
-        self.__Rate_of_change_of_RPM = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Sync_loss_counter = pd.DataFrame(columns=["Time", "data"])
-        self.__Sync_loss_reason_code = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Average_fuel_flow = pd.DataFrame(columns=["Time", "data"])      
-
-        self.__Damper_Left_Rear = pd.DataFrame(columns=["Time", "data"])      
-        self.__Damper_Right_Rear = pd.DataFrame(columns=["Time", "data"])      
-        self.__Gear = pd.DataFrame(columns=["Time", "data"])      
-        self.__Brake_Pressure = pd.DataFrame(columns=["Time", "data"])   
-        self.__BSPD = pd.DataFrame(columns=["Time", "data"]) 
-
-        self.__Roll = pd.DataFrame(columns=["Time", "data"])
-        self.__Pitch = pd.DataFrame(columns=["Time", "data"])        
-        self.__Yaw = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Damper_Left_Front = pd.DataFrame(columns=["Time", "data"])
-        self.__Damper_Right_Front = pd.DataFrame(columns=["Time", "data"])        
-        self.__Steering_Angle = pd.DataFrame(columns=["Time", "data"])
-
-        self.__GPS_Latitude = pd.DataFrame(columns=["Time", "data"])
-        self.__GPS_Longitude = pd.DataFrame(columns=["Time", "data"])        
-        self.__GPS_Speed = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Acceleration_on_X_axis = pd.DataFrame(columns=["Time", "data"])
-        self.__Acceleration_on_Y_axis = pd.DataFrame(columns=["Time", "data"])        
-        self.__Acceleration_on_Z_axis = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Gyroscope_on_X_axis = pd.DataFrame(columns=["Time", "data"])
-        self.__Gyroscope_on_Y_axis = pd.DataFrame(columns=["Time", "data"])        
-        self.__Gyroscope_on_Z_axis = pd.DataFrame(columns=["Time", "data"])
-
-        self.__Gates_times=pd.DataFrame(columns=["Time", "data"])
+        # keep gates separate (table of laps)
+        self.__Gates_times = pd.DataFrame(columns=["Time", "data"])
 
         # IMU filtering toggle & tuning (no external deps)
         self.__ENABLE_IMU_KALMAN = True
         self.__KF_PROCESS_VAR = 0.05   # Q — increase = smoother, but more lag
         self.__KF_MEASURE_VAR = 4.0    # R — increase = trust filter more than measurements
 
-        # self.__corners=
-        self.__mainCoor=csv_class.get_main_coordinates()
-        self.__gates_pos=csv_class.get_gates()
-        print("GAtes&Coor",self.__gates_pos,self.__mainCoor)
+        self.__mainCoor  = csv_class.get_main_coordinates()
+        self.__gates_pos = csv_class.get_gates()
+        print("GAtes&Coor", self.__gates_pos, self.__mainCoor)
+
         self.__id_data_map = {
             1520: ([2,2,2,2],[1,0.001,0.001,1]),
             1522: ([2,2,2,2],[0,0.1,0.1,0.1]),
@@ -386,39 +377,49 @@ class CSV_Tables:
             280:  ([2,2,2,2],[1,1,1,0]),
             281:  ([2,2,2,2],[1,1,1,0])
         }
-        self.__prev_pos=None
-        self.__curr_pos=None
-        self.__track_len=0
-        self.__lap={}
-        self.__car_pos=[]
-        self.__just_s0=None
-        
+        self.__prev_pos   = None
+        self.__curr_pos   = None
+        self.__track_len  = 0
+        self.__lap        = {}
+        self.__car_pos    = []
+        self.__just_s0    = None
+
+    # --- convenience accessors ---
+    def _s(self, key: str) -> pd.DataFrame:
+        return self._series[key]
+
+    def _set_s(self, key: str, df: pd.DataFrame):
+        self._series[key] = df
+
+    def as_map(self, key: str) -> dict:
+        df = self._series.get(key)
+        return self._series_dict_from_df(df, "Time", "data") if df is not None else {}
+
+    def __getattr__(self, name: str):
+        """Compatibility shim so old code like self.__RPM still works."""
+        prefix = f"_{self.__class__.__name__}__"
+        if name.startswith(prefix):
+            key = name[len(prefix):]
+            if key in getattr(self, "_series", {}):
+                return self._series[key]
+        raise AttributeError(f"{self.__class__.__name__} has no attribute {name}")
 
     # ---------- SIMPLE 1D KALMAN FILTER (value-only) ----------
     def _kalman_filter_df(self, df: pd.DataFrame, process_var=None, measure_var=None) -> pd.DataFrame:
-        """Apply a basic 1D Kalman filter to df['data'] and return a copy with smoothed 'data'.
-        No external libraries; constant model (good enough for IMU smoothing)."""
         if df is None or df.empty:
             return df
-
         q = self.__KF_PROCESS_VAR if process_var is None else process_var
         r = self.__KF_MEASURE_VAR if measure_var is None else measure_var
 
-        # State: x (value), covariance: p
         x = float(df["data"].iloc[0])
         p = 1.0
-
-        F = 1.0   # state transition
-        H = 1.0   # measurement
-        Q = float(q)
-        R = float(r)
+        F = 1.0; H = 1.0
+        Q = float(q); R = float(r)
 
         out = []
         for z in df["data"].astype(float).tolist():
-            # predict
             x = F * x
             p = F * p * F + Q
-            # update
             K = (p * H) / (H * p * H + R)
             x = x + K * (z - H * x)
             p = (1 - K * H) * p
@@ -428,140 +429,91 @@ class CSV_Tables:
         df_filt["data"] = out
         return df_filt
 
-    def _kalman_filter_2d_accel_velocity(self, df: pd.DataFrame,
-                                        process_Q=None,
-                                        measure_R=None) -> pd.DataFrame:
+    def _kalman_filter_2d_accel_velocity(self, df: pd.DataFrame, process_Q=None, measure_R=None) -> pd.DataFrame:
         if df is None or df.empty:
             return df.copy()
-
         w = df.copy()
         w["Time"] = w["Time"].astype(float)
         w = w.sort_values("Time").reset_index(drop=True)
 
         if process_Q is None:
-            process_Q = np.array([[1e-3, 0.0],
-                                [0.0,  1e-2]], dtype=float)
+            process_Q = np.array([[1e-3, 0.0],[0.0,  1e-2]], dtype=float)
         if measure_R is None:
             measure_R = 1e-1  # (m/s^2)^2
 
         first_acc = float(w["data"].iloc[0])
-        # x = [vel, accel]
-        x = np.array([0.0, first_acc], dtype=float)
+        x = np.array([0.0, first_acc], dtype=float)  # [vel, accel]
         P = np.eye(2, dtype=float)
-
         I = np.eye(2, dtype=float)
 
-        vel_list = []
-        acc_list = []
-        t_list   = []
-
+        vel_list, acc_list, t_list = [], [], []
         times = w["Time"].to_numpy(float)
         meas_accels = w["data"].to_numpy(float)
-
         last_t = times[0]
 
         for t, z in zip(times, meas_accels):
             dt = t - last_t
-            if dt < 0:
-                dt = 0.0
+            if dt < 0: dt = 0.0
             last_t = t
 
-            # Predict
-            F = np.array([[1.0, dt],
-                        [0.0, 1.0]], dtype=float)
+            F = np.array([[1.0, dt],[0.0, 1.0]], dtype=float)
             x = F @ x
             P = F @ P @ F.T + process_Q
 
-            # Update
-            H = np.array([[0.0, 1.0]], dtype=float)  # measure accel only
-            z_pred = H @ x
-            y = z - z_pred[0]
-
+            H = np.array([[0.0, 1.0]], dtype=float)
+            y = z - (H @ x)[0]
             S = (H @ P @ H.T)[0, 0] + measure_R
             K = (P @ H.T) / S
             x = x + K.flatten() * y
             P = (I - K @ H) @ P
 
-            vel_list.append(x[0])
-            acc_list.append(x[1])
-            t_list.append(t)
+            vel_list.append(x[0]); acc_list.append(x[1]); t_list.append(t)
 
-        out = pd.DataFrame({
-            "Time": t_list,
-            "vel": vel_list,     # m/s
-            "accel": acc_list,   # m/s^2 filtered
-        })
-        return out
+        return pd.DataFrame({"Time": t_list, "vel": vel_list, "accel": acc_list})
 
-    def _kalman_filter_2d_gyro(self, df: pd.DataFrame,
-                           process_Q=None,
-                           measure_R=None) -> pd.DataFrame:
+    def _kalman_filter_2d_gyro(self, df: pd.DataFrame, process_Q=None, measure_R=None) -> pd.DataFrame:
         if df is None or df.empty:
             return df.copy()
-
         w = df.copy()
         w["Time"] = w["Time"].astype(float)
         w = w.sort_values("Time").reset_index(drop=True)
 
         if process_Q is None:
-            process_Q = np.array([[1e-5, 0.0],
-                                [0.0,  1e-4]], dtype=float)
+            process_Q = np.array([[1e-5, 0.0],[0.0,  1e-4]], dtype=float)
         if measure_R is None:
             measure_R = 1e-3  # (rad/s)^2
 
         first_rate = float(w["data"].iloc[0])
-        # x = [angle, rate]
-        x = np.array([0.0, first_rate], dtype=float)
+        x = np.array([0.0, first_rate], dtype=float)  # [angle, rate]
         P = np.eye(2, dtype=float)
-
         I = np.eye(2, dtype=float)
 
-        ang_list = []
-        rate_list = []
-        t_list    = []
-
+        ang_list, rate_list, t_list = [], [], []
         times = w["Time"].to_numpy(float)
         meas_rates = w["data"].to_numpy(float)
-
         last_t = times[0]
 
         for t, z in zip(times, meas_rates):
             dt = t - last_t
-            if dt < 0:
-                dt = 0.0
+            if dt < 0: dt = 0.0
             last_t = t
 
-            # Predict
-            F = np.array([[1.0, dt],
-                        [0.0, 1.0]], dtype=float)
+            F = np.array([[1.0, dt],[0.0, 1.0]], dtype=float)
             x = F @ x
             P = F @ P @ F.T + process_Q
 
-            # Update
-            H = np.array([[0.0, 1.0]], dtype=float)  # we observe rate
-            z_pred = H @ x
-            y = z - z_pred[0]
-
+            H = np.array([[0.0, 1.0]], dtype=float)
+            y = z - (H @ x)[0]
             S = (H @ P @ H.T)[0, 0] + measure_R
             K = (P @ H.T) / S
             x = x + K.flatten() * y
             P = (I - K @ H) @ P
 
-            ang_list.append(x[0])
-            rate_list.append(x[1])
-            t_list.append(t)
+            ang_list.append(x[0]); rate_list.append(x[1]); t_list.append(t)
 
-        out = pd.DataFrame({
-            "Time": t_list,
-            "angle": ang_list,   # rad
-            "rate": rate_list,   # rad/s filtered
-        })
-        return out
+        return pd.DataFrame({"Time": t_list, "angle": ang_list, "rate": rate_list})
 
-
-    # ---------- Helper: integrate rate-of-change (only if __IMU_INPUT_KIND == "rate") ----------
     def _integrate_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Integrate df['data'] using df['Time'] (seconds). Assumes 'data' is rate-of-change."""
         if df is None or df.empty:
             return df
         df = df.copy()
@@ -571,9 +523,7 @@ class CSV_Tables:
         df["data"] = (df["data"].astype(float) * dt).cumsum()
         return df
 
-    # ---------- Helpers: counts -> SI ----------
     def _scale_accel_counts_to_ms2(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Counts (values) -> m/s², using ACCEL_SENS counts/g."""
         if df is None or df.empty:
             return df
         out = df.copy()
@@ -581,14 +531,12 @@ class CSV_Tables:
         return out
 
     def _scale_gyro_counts_to_rads(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Counts (values) -> rad/s, using GYRO_SENS counts/(°/s)."""
         if df is None or df.empty:
             return df
         out = df.copy()
         out["data"] = (out["data"].astype(float) / self.GYRO_SENS) * (np.pi / 180.0)
         return out
 
-    # ---------- Optional: remove DC bias from first N samples ----------
     def _remove_bias(self, df: pd.DataFrame, n:int) -> pd.DataFrame:
         if df is None or df.empty or n <= 0:
             return df
@@ -599,12 +547,6 @@ class CSV_Tables:
         return out
 
     def check_cross(self, finalize: bool = False):
-        """
-        ALWAYS test S0 first on every segment.
-        - If we see S0 with no S2 yet -> (re)start lap at S0 (resync)
-        - If we see S0 after S2        -> close lap (S3) and start new lap at that S0
-        Also flushes incomplete lap on finalize=True.
-        """
         def _push_current_lap(complete: bool, t_for_row=None):
             if not self.__lap:
                 return
@@ -628,31 +570,23 @@ class CSV_Tables:
         prev, curr = self.__prev_pos, self.__curr_pos
         dist = self.haversine_distance(prev.lat, prev.lon, curr.lat, curr.lon)
 
-        # --- S0 FIRST ---
         s0 = self.__gates_pos["S0"]
         s0.update_points(prev, curr)
         if s0.get_intersection_time():
             t0 = s0.get_time()
             if self.__lap.get("S2") is not None and t0 > self.__lap["S2"]:
-                # close lap
                 self.__lap["S3"] = t0
-                print(f"[CHECK_CROSS] lap complete: {self.__lap}")
                 _push_current_lap(complete=True, t_for_row=t0)
-                # start next at this S0
                 self.__lap = {"S0": t0}
                 self.__track_len = 0
                 self._gate_idx = 1
                 self.__just_s0 = True
-                print(f"[CHECK_CROSS] -> new lap start (S0) at {t0}")
             else:
-                # start/resync lap at this S0
                 self.__lap = {"S0": t0}
                 self.__track_len = 0
                 self._gate_idx = 1
                 self.__just_s0 = True
-                print(f"[CHECK_CROSS] -> lap start (S0) at {t0}")
         else:
-            # Then look for the expected sector (S1 or S2)
             seq = ["S0", "S1", "S2"]
             if 0 < self._gate_idx < len(seq):
                 name = seq[self._gate_idx]
@@ -661,142 +595,110 @@ class CSV_Tables:
                 if g.get_intersection_time():
                     t = g.get_time()
                     self.__lap[name] = t
-                    print(f"[CHECK_CROSS] -> recorded {name} at {t}")
                     self._gate_idx += 1
 
-        # accumulate distance after S0
         if self._gate_idx > 0 and not getattr(self, "__just_s0", False):
             self.__track_len += dist
         if getattr(self, "__just_s0", False):
             self.__just_s0 = False
 
-        # EOF flush
         if finalize and "S0" in self.__lap and "S3" not in self.__lap:
             t_last = self.__lap.get("S2") or self.__lap.get("S1") or self.__lap.get("S0") or \
-                    getattr(curr, "time", None) or getattr(curr, "timestamp", None) or 0
-            print(f"[CHECK_CROSS] finalize -> pushing INCOMPLETE lap: {self.__lap} (t={t_last})")
+                     getattr(curr, "time", None) or getattr(curr, "timestamp", None) or 0
             _push_current_lap(complete=False, t_for_row=t_last)
 
         self.__prev_pos = curr
-
 
     def haversine_distance(self, lat1, lon1, lat2, lon2):
         R = 6371000
         phi1 = math.radians(lat1)
         phi2 = math.radians(lat2)
-        delta_phi = math.radians(lat2 - lat1)
-        delta_lambda = math.radians(lon2 - lon1)
-        a = math.sin(delta_phi / 2) ** 2 + \
-            math.cos(phi1) * math.cos(phi2) * \
-            math.sin(delta_lambda / 2) ** 2
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        distance = R * c
-        return distance
-
-   
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+        return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     async def add_data_from(self, file: int, reorder_window_s: float = 0.5):
-
+        """
+        Stream CSV rows and feed them to the lap detector in (mostly) time order
+        without sorting the entire file. A small heap buffer reorders out-of-order
+        rows within `reorder_window_s`.
+        """
         try:
             print("Opening file:", self.__csv_files[file])
 
-            # Min-heap of (time_float, row)
             heap = []
             have_max_t = None
 
             def _drain_ready(until_t):
-                # Pop rows whose time <= until_t
                 while heap and heap[0][0] <= until_t:
                     _t, row = heapq.heappop(heap)
                     _process_row(row)
 
             def _process_row(row):
-                # row: [time, id_hex, payload]
-                
-                time = row[0].strip()
+                t_str = row[0].strip()
                 try:
-                    _id = int(row[1].strip(), 16)   # e.g. "117" -> 279
+                    _id = int(row[1].strip(), 16)
                 except Exception:
                     return
                 aux  = self.get_aditional_data(_id)
                 data = self.sep_data(row[2])
-                
-                self.create_el(_id, aux, data, time)  # will emit GPSPoint only if id==279
+                self.create_el(_id, aux, data, t_str)  # emits GPSPoint only if id==279
 
-            with open(self.__csv_files[file], mode='r', newline='',encoding="utf-8", errors="replace") as openedFile:
-                reader = csv.reader(openedFile)
-
+            with open(self.__csv_files[file], mode='r', newline='', encoding="utf-8", errors="replace") as f:
+                reader = csv.reader(f)
                 for row in reader:
-                    # Skip blanks and obvious headers
                     if not row or len(row) < 3 or row[0].strip().lower() in ("time", "timestamp"):
                         continue
                     try:
                         t = float(row[0])
                     except Exception:
-                        # malformed time -> skip
                         continue
 
-                    if have_max_t is None:
-                        have_max_t = t
-                    else:
-                        have_max_t = max(have_max_t, t)
-
-                    # push to heap
+                    have_max_t = t if have_max_t is None else max(have_max_t, t)
                     heapq.heappush(heap, (t, row))
-
-                    # Drain anything that is safely behind the current max time
-                    # so we keep only a small reorder buffer in memory.
                     _drain_ready(have_max_t - reorder_window_s)
 
-                # EOF: drain everything that remains
                 while heap:
                     _t, row = heapq.heappop(heap)
                     _process_row(row)
 
-            # EOF -> flush any in-progress lap
             self.check_cross(finalize=True)
 
         except Exception as e:
             print("Error reading file:", e)
 
-
     def get_aditional_data(self, id):
         return self.__id_data_map.get(id, [[], []])
 
-    def create_el(self,id,aux,data,time):
+    def create_el(self, id, aux, data, time):
         if aux[1]:
-            start=0
-            length=len(aux[1])
-            car_point=[]
-            for i in range(0,length):
-                el=aux[1][i]
-                if el !=0: 
-                    convertedData=self.convert_data(id,i,data[start:start+aux[0][i]],aux[1][i],time)
-                    self.add_to_tabel(id,i,convertedData[0])
-                    if id==279:
-                        car_point.append(convertedData[1])
-                start+=aux[0][i]
+            start = 0
+            length = len(aux[1])
+            car_point = []
+            for i in range(length):
+                if aux[1][i] != 0:
+                    converted = self.convert_data(id, i, data[start:start+aux[0][i]], aux[1][i], time)
+                    self.add_to_tabel(id, i, converted[0])
+                    if id == 279:
+                        car_point.append(converted[1])
+                start += aux[0][i]
 
-            if id==279 and len(car_point)>2:
+            if id == 279 and len(car_point) > 2:
                 car_point.append(float(time))
-                self.__car_pos.append(GPSPoint(car_point[0],car_point[1],car_point[2],car_point[3]))
-                self.__curr_pos=self.__car_pos[-1]
+                self.__car_pos.append(GPSPoint(car_point[0], car_point[1], car_point[2], car_point[3]))
+                self.__curr_pos = self.__car_pos[-1]
                 self.check_cross()
 
     def add_to_tabel(self, id, index, data):
         signal_name = self.__get_signal_name(id, index)
         if not signal_name:
             return
-
-        df = getattr(self, f"_{self.__class__.__name__}__{signal_name}")
         if isinstance(data, dict):
-            data = pd.DataFrame([data])  
-            if not data.empty and not data.dropna(how="all").empty:
-                new_df = pd.concat([df, data], ignore_index=True)
-            else:
-                new_df = df
-            setattr(self, f"_{self.__class__.__name__}__{signal_name}", new_df)
-            
+            df_old = self._s(signal_name)
+            data_df = pd.DataFrame([data])
+            new_df = df_old if data_df.dropna(how="all").empty else pd.concat([df_old, data_df], ignore_index=True)
+            self._set_s(signal_name, new_df)
 
     def __get_signal_name(self, id, index):
         signal_map = {
@@ -819,9 +721,8 @@ class CSV_Tables:
             return None
         return signal_map[id][index]
 
-    def sep_data(self,data):
-        devData = [data[i:i+2] for i in range(0, len(data), 2)]
-        return devData
+    def sep_data(self, data):
+        return [data[i:i+2] for i in range(0, len(data), 2)]
 
     def convert_data(self, id, index, dataString, multiplier, time):
         combined_hex = ''.join(dataString).strip()
@@ -848,63 +749,45 @@ class CSV_Tables:
             print(f"[convert_data] Failed for id={id} index={index}: {e}")
         return row
 
-    def convert_data_m1(self,data):
-        value=data
-        return int(value[2:4],16)+int(value[0:2],16)*100
+    def convert_data_m1(self, data):
+        return int(data[2:4], 16) + int(data[0:2], 16) * 100
 
-    def convert_data_m2(self,index,data):
-        data/=(10**len(str(data)))
-        return self.__mainCoor[index]+data
-    
-    def fahrenheitToCelsius(self,fahrenheit):
+    def convert_data_m2(self, index, data):
+        data /= (10 ** len(str(data)))
+        return self.__mainCoor[index] + data
+
+    def fahrenheitToCelsius(self, fahrenheit):
         return (fahrenheit - 32) * 5 / 9
 
     def _series_dict_from_df(self, df: pd.DataFrame, time_col: str, value_col: str) -> dict:
-        """
-        Turn columns Time + value_col into {Time: value}
-        Time will be stringified as the dict key (JS Object keys are strings anyway).
-        """
-        
-        if not df.empty:
-            out = {}
-            t_arr = df[time_col].astype(float).to_numpy()
-            v_arr = df[value_col].astype(float).to_numpy()
-            for t, v in zip(t_arr, v_arr):
-                out[str(t)] = v
-            return out
-        else:
-            return df
+        if df is None or df.empty:
+            return {}
+        out = {}
+        t_arr = df[time_col].astype(float).to_numpy()
+        v_arr = df[value_col].astype(float).to_numpy()
+        for t, v in zip(t_arr, v_arr):
+            out[str(t)] = float(v)
+        return out
 
     def _pre_smooth(self, df, window=5):
         if df is None or df.empty:
             return df
         df = df.copy()
         df["data"] = (
-            df["data"]
-            .astype(float)
-            .rolling(window=window, min_periods=1, center=True)
-            .mean()
+            df["data"].astype(float)
+              .rolling(window=window, min_periods=1, center=True)
+              .mean()
         )
         return df
 
-
     def get_data(self):
-        # ----- Gates -----
-        if not self.__Gates_times.empty:
-            gates = {
-                "timestamps": self.__Gates_times["Time"].astype(float).tolist(),
-                "lap_data"  : self.__Gates_times["data"].tolist()
-            }
-        else:
-            gates = {"timestamps": [], "lap_data": []}
-
         # ----- IMU raw -> SI units -----
-        acc_x = self.__Acceleration_on_X_axis.dropna()
-        acc_y = self.__Acceleration_on_Y_axis.dropna()
-        acc_z = self.__Acceleration_on_Z_axis.dropna()
-        gyro_x = self.__Gyroscope_on_X_axis.dropna()
-        gyro_y = self.__Gyroscope_on_Y_axis.dropna()
-        gyro_z = self.__Gyroscope_on_Z_axis.dropna()
+        acc_x = self._s("Acceleration_on_X_axis").dropna()
+        acc_y = self._s("Acceleration_on_Y_axis").dropna()
+        acc_z = self._s("Acceleration_on_Z_axis").dropna()
+        gyro_x = self._s("Gyroscope_on_X_axis").dropna()
+        gyro_y = self._s("Gyroscope_on_Y_axis").dropna()
+        gyro_z = self._s("Gyroscope_on_Z_axis").dropna()
 
         # counts -> physical units
         acc_x = self._scale_accel_counts_to_ms2(acc_x)
@@ -915,12 +798,11 @@ class CSV_Tables:
         gyro_y = self._scale_gyro_counts_to_rads(gyro_y)
         gyro_z = self._scale_gyro_counts_to_rads(gyro_z)
 
-        # bias removal
+        # bias removal + smoothing
         if self.__IMU_BIAS_SAMPLES > 0:
             acc_x = self._remove_bias(acc_x, self.__IMU_BIAS_SAMPLES)
             acc_y = self._remove_bias(acc_y, self.__IMU_BIAS_SAMPLES)
             acc_z = self._remove_bias(acc_z, self.__IMU_BIAS_SAMPLES)
-
             gyro_x = self._remove_bias(gyro_x, self.__IMU_BIAS_SAMPLES)
             gyro_y = self._remove_bias(gyro_y, self.__IMU_BIAS_SAMPLES)
             gyro_z = self._remove_bias(gyro_z, self.__IMU_BIAS_SAMPLES)
@@ -928,24 +810,26 @@ class CSV_Tables:
         acc_x = self._pre_smooth(acc_x, window=7)
         acc_y = self._pre_smooth(acc_y, window=7)
         acc_z = self._pre_smooth(acc_z, window=7)
-
         gyro_x = self._pre_smooth(gyro_x, window=7)
         gyro_y = self._pre_smooth(gyro_y, window=7)
         gyro_z = self._pre_smooth(gyro_z, window=7)
 
         # filtering
         if self.__ENABLE_IMU_KALMAN:
-            # 2D accel: vel+accel
-            acc_x_f = self._kalman_filter_2d_accel_velocity(acc_x,process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float),measure_R=1,)
-            acc_y_f = self._kalman_filter_2d_accel_velocity(acc_y,process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float),measure_R=1,)
-            acc_z_f = self._kalman_filter_2d_accel_velocity(acc_z,process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float),measure_R=1,)
+            acc_x_f = self._kalman_filter_2d_accel_velocity(acc_x,
+                process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float), measure_R=1)
+            acc_y_f = self._kalman_filter_2d_accel_velocity(acc_y,
+                process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float), measure_R=1)
+            acc_z_f = self._kalman_filter_2d_accel_velocity(acc_z,
+                process_Q=np.array([[1e-4, 0.0],[0.0,  1e-4]], dtype=float), measure_R=1)
 
-            # 2D gyro: angle+rate
-            gyro_x_f = self._kalman_filter_2d_gyro(gyro_x,process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float),measure_R=1,)
-            gyro_y_f = self._kalman_filter_2d_gyro(gyro_y,process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float),measure_R=1,)
-            gyro_z_f = self._kalman_filter_2d_gyro(gyro_z,process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float),measure_R=1,)
+            gyro_x_f = self._kalman_filter_2d_gyro(gyro_x,
+                process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float), measure_R=1)
+            gyro_y_f = self._kalman_filter_2d_gyro(gyro_y,
+                process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float), measure_R=1)
+            gyro_z_f = self._kalman_filter_2d_gyro(gyro_z,
+                process_Q=np.array([[1e-5, 0.0],[0.0,  1e-5]], dtype=float), measure_R=1)
 
-            # convert to {timestamp: value} dicts, using the columns
             Accel_X_dict = self._series_dict_from_df(acc_x_f, "Time", "accel")
             Accel_Y_dict = self._series_dict_from_df(acc_y_f, "Time", "accel")
             Accel_Z_dict = self._series_dict_from_df(acc_z_f, "Time", "accel")
@@ -953,21 +837,10 @@ class CSV_Tables:
             Gyro_X_dict  = self._series_dict_from_df(gyro_x_f, "Time", "rate")
             Gyro_Y_dict  = self._series_dict_from_df(gyro_y_f, "Time", "rate")
             Gyro_Z_dict  = self._series_dict_from_df(gyro_z_f, "Time", "rate")
-
-            # optional extras you can expose, not currently used in React:
-            Vel_X_dict   = self._series_dict_from_df(acc_x_f, "Time", "vel")
-            Vel_Y_dict   = self._series_dict_from_df(acc_y_f, "Time", "vel")
-            Vel_Z_dict   = self._series_dict_from_df(acc_z_f, "Time", "vel")
-
-            Angle_X_dict = self._series_dict_from_df(gyro_x_f, "Time", "angle")
-            Angle_Y_dict = self._series_dict_from_df(gyro_y_f, "Time", "angle")
-            Angle_Z_dict = self._series_dict_from_df(gyro_z_f, "Time", "angle")
         else:
-            # no kalman: just dump the bias-corrected physical units directly
-            # build dict {timestamp: value} from raw df["Time"], df["data"]
-
             def df_to_dict(df):
                 out = {}
+                if df is None or df.empty: return out
                 df_sorted = df.copy()
                 df_sorted["Time"] = df_sorted["Time"].astype(float)
                 df_sorted = df_sorted.sort_values("Time")
@@ -979,240 +852,187 @@ class CSV_Tables:
             Accel_X_dict = df_to_dict(acc_x)
             Accel_Y_dict = df_to_dict(acc_y)
             Accel_Z_dict = df_to_dict(acc_z)
-
             Gyro_X_dict  = df_to_dict(gyro_x)
             Gyro_Y_dict  = df_to_dict(gyro_y)
             Gyro_Z_dict  = df_to_dict(gyro_z)
 
-            Vel_X_dict = {}
-            Vel_Y_dict = {}
-            Vel_Z_dict = {}
-            Angle_X_dict = {}
-            Angle_Y_dict = {}
-            Angle_Z_dict = {}
+        payload = {}
 
-        # ----- build final payload -----
+        # simple signals
+        simple_keys = [
+            "RPM", "ECU_time", "Main_pulsewidth_bank1", "Main_pulsewidth_bank2",
+            "Manifold_air_pressure", "Manifold_air_temperature", "Coolant_temperature",
+            "Throttle_position", "Battery_voltage",
+            "Air_density_correction", "Warmup_correction", "TPS_based_acceleration",
+            "TPS_based_fuel_cut", "Total_fuel_correction", "VE_value_table_bank1",
+            "VE_value_table_bank2", "Cold_advance", "Rate_of_change_of_TPS",
+            "Rate_of_change_of_RPM",
+            "Sync_loss_counter", "Sync_loss_reason_code", "Average_fuel_flow",
+            "Damper_Left_Rear", "Damper_Right_Rear", "Gear",
+            "Brake_Pressure", "BSPD",
+            "Damper_Left_Front", "Damper_Right_Front", "Steering_Angle",
+            "GPS_Latitude", "GPS_Longitude", "GPS_Speed",
+        ]
+        for k in simple_keys:
+            payload[k] = self.as_map(k)
 
-        def _as_map(df):
-            return self._series_dict_from_df(df, "Time", "data")
+        # IMU exports
+        payload["Acceleration_on_X_axis"] = Accel_X_dict
+        payload["Acceleration_on_Y_axis"] = Accel_Y_dict
+        payload["Acceleration_on_Z_axis"] = Accel_Z_dict
+        payload["Gyroscope_on_X_axis"]    = Gyro_X_dict
+        payload["Gyroscope_on_Y_axis"]    = Gyro_Y_dict
+        payload["Gyroscope_on_Z_axis"]    = Gyro_Z_dict
 
-        return {
-        # engine/ecu
-            "RPM": self._series_dict_from_df(self.__RPM, "Time", "data"),
-            "ECU_time": self._series_dict_from_df(self.__ECU_time, "Time", "data"),
-            "Main_pulsewidth_bank1": self._series_dict_from_df(self.__Main_pulsewidth_bank1, "Time", "data"),
-            "Main_pulsewidth_bank2": self._series_dict_from_df(self.__Main_pulsewidth_bank2, "Time", "data"),
+        # Gates
+        if not self.__Gates_times.empty:
+            gates = {
+                "timestamps": self.__Gates_times["Time"].astype(float).tolist(),
+                "lap_data"  : self.__Gates_times["data"].tolist()
+            }
+        else:
+            gates = {"timestamps": [], "lap_data": []}
+        payload["Gates_times"] = gates
 
-            # 5F2
-            "Manifold_air_pressure": self._series_dict_from_df(self.__Manifold_air_pressure, "Time", "data"),
-            "Manifold_air_temperature": self._series_dict_from_df(self.__Manifold_air_temperature, "Time", "data"),
-            "Coolant_temperature": self._series_dict_from_df(self.__Coolant_temperature, "Time", "data"),
-
-            # 5F3
-            "Throttle_position": self._series_dict_from_df(self.__Throttle_position, "Time", "data"),
-            "Battery_voltage": self._series_dict_from_df(self.__Battery_voltage, "Time", "data"),
-
-            # 5F4..5F7
-            "Air_density_correction": self._series_dict_from_df(self.__Air_density_correction, "Time", "data"),
-            "Warmup_correction": self._series_dict_from_df(self.__Warmup_correction, "Time", "data"),
-            "TPS_based_acceleration": self._series_dict_from_df(self.__TPS_based_acceleration, "Time", "data"),
-            "TPS_based_fuel_cut": self._series_dict_from_df(self.__TPS_based_fuel_cut, "Time", "data"),
-            "Total_fuel_correction": self._series_dict_from_df(self.__Total_fuel_correction, "Time", "data"),
-            "VE_value_table_bank1": self._series_dict_from_df(self.__VE_value_table_bank1, "Time", "data"),
-            "VE_value_table_bank2": self._series_dict_from_df(self.__VE_value_table_bank2, "Time", "data"),
-            "Cold_advance": self._series_dict_from_df(self.__Cold_advance, "Time", "data"),
-            "Rate_of_change_of_TPS": self._series_dict_from_df(self.__Rate_of_change_of_TPS, "Time", "data"),
-            "Rate_of_change_of_RPM": self._series_dict_from_df(self.__Rate_of_change_of_RPM, "Time", "data"),
-
-            # 61B / 624
-            "Sync_loss_counter": self._series_dict_from_df(self.__Sync_loss_counter, "Time", "data"),
-            "Sync_loss_reason_code": self._series_dict_from_df(self.__Sync_loss_reason_code, "Time", "data"),
-            "Average_fuel_flow": self._series_dict_from_df(self.__Average_fuel_flow, "Time", "data"),
-
-            # chassis
-            "Damper_Left_Rear": self._series_dict_from_df(self.__Damper_Left_Rear, "Time", "data"),
-            "Damper_Right_Rear": self._series_dict_from_df(self.__Damper_Right_Rear, "Time", "data"),
-            "Damper_Left_Front": self._series_dict_from_df(self.__Damper_Left_Front, "Time", "data"),
-            "Damper_Right_Front": self._series_dict_from_df(self.__Damper_Right_Front, "Time", "data"),
-            "Gear": self._series_dict_from_df(self.__Gear, "Time", "data"),
-            "Brake_Pressure": self._series_dict_from_df(self.__Brake_Pressure, "Time", "data"),
-            "BSPD": self._series_dict_from_df(self.__BSPD, "Time", "data"),
-            "Steering_Angle": self._series_dict_from_df(self.__Steering_Angle, "Time", "data"),
-        
-
-            # GPS arrays go out as arrays (frontend uses them directly)
-            "GPS_Latitude": self.__GPS_Latitude.dropna().astype(float).to_numpy().tolist(),
-            "GPS_Longitude": self.__GPS_Longitude.dropna().astype(float).to_numpy().tolist(),
-            "GPS_Speed": self.__GPS_Speed.dropna().astype(float).to_numpy().tolist(),
-
-            # IMU (what frontend already expects)
-            "Acceleration_on_X_axis": Accel_X_dict,
-            "Acceleration_on_Y_axis": Accel_Y_dict,
-            "Acceleration_on_Z_axis": Accel_Z_dict,
-
-            "Gyroscope_on_X_axis": Gyro_X_dict,
-            "Gyroscope_on_Y_axis": Gyro_Y_dict,
-            "Gyroscope_on_Z_axis": Gyro_Z_dict,
-
-            # Optional bonus channels if you want to use them later:
-            "Velocity_on_X_axis": Vel_X_dict,
-            "Velocity_on_Y_axis": Vel_Y_dict,
-            "Velocity_on_Z_axis": Vel_Z_dict,
-
-            "Angle_on_X_axis": Angle_X_dict,
-            "Angle_on_Y_axis": Angle_Y_dict,
-            "Angle_on_Z_axis": Angle_Z_dict,
-
-            "Gates_times": gates,
-
-            "GPS_Latitude_counter": len(self.__GPS_Latitude.dropna()),
-            "GPS_Longitude_counter": len(self.__GPS_Longitude.dropna()),
-            "GPS_Speed_counter": len(self.__GPS_Speed.dropna()),
-        }
-
-
-
+        return payload
 
     def get_filtred_data(self):
-        return {
-            "RPM": lttb.downsample(self.__RPM.dropna().astype(float).to_numpy(), n_out=50),
-            "ECU_time": lttb.downsample(self.__ECU_time.dropna().astype(float).to_numpy(), n_out=50),
-            "Main_pulsewidth_bank1": lttb.downsample(self.__Main_pulsewidth_bank1.dropna().astype(float).to_numpy(), n_out=50),
-            "Main_pulsewidth_bank2": lttb.downsample(self.__Main_pulsewidth_bank2.dropna().astype(float).to_numpy(), n_out=50),
+        """
+        Downsample each series to reduce payload. Uses LTTB if available,
+        otherwise returns a naive stride-downsample to n_out points.
+        """
+        def df_to_xy(df: pd.DataFrame) -> np.ndarray:
+            if df is None or df.empty:
+                return np.empty((0,2))
+            d = df[["Time", "data"]].astype(float)
+            return d.to_numpy()
 
-            "Manifold_air_pressure": lttb.downsample(self.__Manifold_air_pressure.dropna().astype(float).to_numpy(), n_out=50),
-            "Manifold_air_temperature": lttb.downsample(self.__Manifold_air_temperature.dropna().astype(float).to_numpy(), n_out=50),
-            "Coolant_temperature": lttb.downsample(self.__Coolant_temperature.dropna().astype(float).to_numpy(), n_out=50),
+        def downsample_xy(xy: np.ndarray, n_out=50) -> np.ndarray:
+            if xy.shape[0] <= n_out:
+                return xy
+            if _HAS_LTTB:
+                return lttb.downsample(xy, n_out=n_out)
+            # naive fallback: uniform stride
+            stride = max(1, xy.shape[0] // n_out)
+            return xy[::stride][:n_out]
 
-            "Throttle_position": lttb.downsample(self.__Throttle_position.dropna().astype(float).to_numpy(), n_out=50),
-            "Battery_voltage": lttb.downsample(self.__Battery_voltage.dropna().astype(float).to_numpy(), n_out=50),
+        out = {}
+        for key in self.SIGNAL_KEYS:
+            xy = df_to_xy(self._s(key).dropna())
+            out[key] = downsample_xy(xy, n_out=50)
 
-            "Air_density_correction": lttb.downsample(self.__Air_density_correction.dropna().astype(float).to_numpy(), n_out=50),
-            "Warmup_correction": lttb.downsample(self.__Warmup_correction.dropna().astype(float).to_numpy(), n_out=50),
-            "TPS_based_acceleration": lttb.downsample(self.__TPS_based_acceleration.dropna().astype(float).to_numpy(), n_out=50),
-            "TPS_based_fuel_cut": lttb.downsample(self.__TPS_based_fuel_cut.dropna().astype(float).to_numpy(), n_out=50),
+        # Gates_times (convert to two-column numeric for consistency)
+        if not self.__Gates_times.empty:
+            g = self.__Gates_times.copy()
+            g["Time"] = g["Time"].astype(float)
+            # downsample by time only; represent as [Time, idx]
+            gt_xy = np.column_stack([
+                g["Time"].to_numpy(),
+                np.arange(len(g), dtype=float)
+            ])
+            out["Gates_times"] = downsample_xy(gt_xy, n_out=50)
+        else:
+            out["Gates_times"] = np.empty((0,2))
 
-            "Total_fuel_correction": lttb.downsample(self.__Total_fuel_correction.dropna().astype(float).to_numpy(), n_out=50),
-            "VE_value_table_bank1": lttb.downsample(self.__VE_value_table_bank1.dropna().astype(float).to_numpy(), n_out=50),
-            "VE_value_table_bank2": lttb.downsample(self.__VE_value_table_bank2.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Cold_advance": lttb.downsample(self.__Cold_advance.dropna().astype(float).to_numpy(), n_out=50),
-            "Rate_of_change_of_TPS": lttb.downsample(self.__Rate_of_change_of_TPS.dropna().astype(float).to_numpy(), n_out=50),
-            "Rate_of_change_of_RPM": lttb.downsample(self.__Rate_of_change_of_RPM.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Sync_loss_counter": lttb.downsample(self.__Sync_loss_counter.dropna().astype(float).to_numpy(), n_out=50),
-            "Sync_loss_reason_code": lttb.downsample(self.__Sync_loss_reason_code.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Average_fuel_flow": lttb.downsample(self.__Average_fuel_flow.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Damper_Left_Rear": lttb.downsample(self.__Damper_Left_Rear.dropna().astype(float).to_numpy(), n_out=50),
-            "Damper_Right_Rear": lttb.downsample(self.__Damper_Right_Rear.dropna().astype(float).to_numpy(), n_out=50),
-            "Gear": lttb.downsample(self.__Gear.dropna().astype(float).to_numpy(), n_out=50),
-            "Brake_Pressure": lttb.downsample(self.__Brake_Pressure.dropna().astype(float).to_numpy(), n_out=50),
-            "BSPD": lttb.downsample(self.__BSPD.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Roll": lttb.downsample(self.__Roll.dropna().astype(float).to_numpy(), n_out=50),
-            "Pitch": lttb.downsample(self.__Pitch.dropna().astype(float).to_numpy(), n_out=50),
-            "Yaw": lttb.downsample(self.__Yaw.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Damper_Left_Front": lttb.downsample(self.__Damper_Left_Front.dropna().astype(float).to_numpy(), n_out=50),
-            "Damper_Right_Front": lttb.downsample(self.__Damper_Right_Front.dropna().astype(float).to_numpy(), n_out=50),
-            "Steering_Angle": lttb.downsample(self.__Steering_Angle.dropna().astype(float).to_numpy(), n_out=50),
-
-            "GPS_Latitude": lttb.downsample(self.__GPS_Latitude.dropna().astype(float).to_numpy(), n_out=50),
-            "GPS_Longitude": lttb.downsample(self.__GPS_Longitude.dropna().astype(float).to_numpy(), n_out=50),
-            "GPS_Speed": lttb.downsample(self.__GPS_Speed.dropna().astype(float).to_numpy(), n_out=50),
-
-            "Acceleration_on_X_axis": lttb.downsample(self.__Acceleration_on_X_axis.dropna().astype(float).to_numpy(), n_out=50),
-            "Acceleration_on_Y_axis": lttb.downsample(self.__Acceleration_on_Y_axis.dropna().astype(float).to_numpy(), n_out=50),
-            "Acceleration_on_Z_axis": lttb.downsample(self.__Acceleration_on_Z_axis.dropna().astype(float).to_numpy(), n_out=50),
-            "Gates_times": lttb.downsample(self.__Gates_times.dropna().astype(float).to_numpy(), n_out=50),
-        }
-
+        return out
 
     def __del__(self):
         print("Destructor called for CSV_Tables")
-        self.__RPM = None
-        self.__Barometric_pressure = None
-        self.__Manifold_air_pressure = None
-        self.__Manifold_air_temperature = None
-        self.__Coolant_temperature = None
-        self.__Throttle_position = None
-        self.__Battery_voltage = None
+        self._series.clear()
+        self.__Gates_times = None
 
 
 
 
 
 class MQTT:
-    def __init__(self, app: FastAPI, corners, mainCoordinates, broker='mqtt.eclipseprojects.io', port=1883, topic="python/mqtt", client_id="3"):
+    """
+    Minimal, robust wrapper over paho-mqtt that:
+      - keeps your existing public methods (set_custom_on_message, get_client, etc.)
+      - supports optional username/password and TLS
+      - does clean async-friendly start/stop
+      - lets other classes inject a custom on_message handler
+    """
+
+    def __init__(
+        self,
+        app: FastAPI,
+        corners,
+        mainCoordinates,
+        broker: str = "mqtt.eclipseprojects.io",
+        port: int = 1883,
+        topic: str = "python/mqtt",
+        client_id: str = "3",
+    ):
         self.__app = app
         self.__broker = broker
-        self.__port = port
-        self.__client_id = client_id
+        self.__port = int(port)
+        self.__client_id = str(client_id)
         self.__topic = topic
-        self.__client = None
+        self.__client: Optional[mqtt_client.Client] = None
         self.__gates = corners
         self.__mainCoor = mainCoordinates
-        self.__websocket_runner = None
 
-        self.__custom_on_message = None 
-        
-    async def connect_to_mqtt(self):
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
-                print("Connected to MQTT Broker!")
-                client.subscribe(self.__topic)
-            else:
-                print(f"Failed to connect, return code {rc}")
+        # Optional auth/TLS
+        self.__username: Optional[str] = None
+        self.__password: Optional[str] = None
+        self.__use_tls: bool = (self.__port == 8883)
+        self.__tls_insecure: bool = True  # set False if you want cert validation
 
-        def default_on_message(client, userdata, msg):
-            try:
-                print(f"Message received on {msg.topic}: {msg.payload.decode()}")
-            except Exception as e:
-                print(f"Error handling message: {e}")
+        # External message handler (installed by MQTT_Tables via set_custom_on_message)
+        self.__custom_on_message: Optional[Callable] = None
 
+
+
+
+    async def disconnect(self):
+        """Gracefully unsubscribe, stop loop, and disconnect MQTT."""
         try:
-            client = mqtt_client.Client()
-
-            # OPTIONAL: credentials
-            if hasattr(self, "__username") and hasattr(self, "__password"):
-                client.username_pw_set(self.__username, self.__password)
-
-            # OPTIONAL: TLS (for secure brokers)
-            if self.__port == 8883:
-                client.tls_set(tls_version=ssl.PROTOCOL_TLS)
-                client.tls_insecure_set(True)
-
-            client.on_connect = on_connect
-
-            # ✅ Use custom handler if available
-            if self.__custom_on_message:
-                client.on_message = self.__custom_on_message
-            else:
-                client.on_message = default_on_message
-
-            client.connect(self.__broker, self.__port)
-            client.loop_start()
-
-            self.__client = client
-            print("MQTT loop started")
-            return {"message": "MQTT connected"}
-
+            if self.__client:
+                try:
+                    self.__client.unsubscribe(self.__topic)
+                except Exception:
+                    pass
+                try:
+                    self.__client.loop_stop()
+                except Exception:
+                    pass
+                try:
+                    self.__client.disconnect()
+                except Exception:
+                    pass
+                self.__client = None
+            # Clear any custom handler so future connects start clean
+            self.__custom_on_message = None
+            return {"message": "MQTT disconnected"}
         except Exception as e:
-            print(f"Failed to connect to MQTT broker: {e}")
             return {"error": str(e)}
 
-    def set_custom_on_message(self, handler):  # ✅ NEW: allows others to set handler
-        self.__custom_on_message = handler
+    # ---------- Public helpers you already use elsewhere ----------
 
-    def get_client(self):
+    def set_custom_on_message(self, handler: Callable):
+        """Allow another class to supply an on_message callback."""
+        self.__custom_on_message = handler
+        if self.__client is not None:
+            self.__client.on_message = handler
+
+    def configure_auth(self, username: str, password: str):
+        """Optional: set username/password before connect()."""
+        self.__username = username
+        self.__password = password
+
+    def enable_tls(self, insecure: bool = True):
+        """Optional: enable TLS (if your broker uses 8883, TLS is auto-enabled)."""
+        self.__use_tls = True
+        self.__tls_insecure = bool(insecure)
+
+    def get_client(self) -> Optional[mqtt_client.Client]:
         return self.__client
 
-    def get_app(self):
+    def get_app(self) -> FastAPI:
         return self.__app
 
-    def get_topic(self):
+    def get_topic(self) -> str:
         return self.__topic
 
     def get_gates(self):
@@ -1221,13 +1041,105 @@ class MQTT:
     def get_main_coordinates(self):
         return self.__mainCoor
 
+    # ---------- Connect / Subscribe / Publish / Stop ----------
+
+    async def connect_to_mqtt(self):
+        """
+        Starts the paho network loop in a background thread (loop_start).
+        Safe to call from async code. Returns a small dict status.
+        """
+        try:
+            # paho-mqtt v1.x compatible client; if you're on v2, keep this and pin to v1.6.*
+            client = mqtt_client.Client(client_id=self.__client_id, clean_session=True)
+
+            if self.__username and self.__password:
+                client.username_pw_set(self.__username, self.__password)
+
+            if self.__use_tls or self.__port == 8883:
+                client.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
+                client.tls_insecure_set(self.__tls_insecure)
+
+            # --- callbacks ---
+            def _on_connect(cli, userdata, flags, rc):
+                if rc == 0:
+                    print("MQTT: connected")
+                    try:
+                        cli.subscribe(self.__topic, qos=0)
+                        print(f"MQTT: subscribed to {self.__topic}")
+                    except Exception as e:
+                        print(f"MQTT: subscribe failed: {e}")
+                else:
+                    print(f"MQTT: connect failed rc={rc}")
+
+            def _default_on_message(cli, userdata, msg):
+                try:
+                    payload = msg.payload.decode(errors="ignore")
+                    print(f"[MQTT] {msg.topic}: {payload[:200]}")
+                except Exception as e:
+                    print(f"[MQTT] on_message error: {e}")
+
+            client.on_connect = _on_connect
+            client.on_disconnect = lambda cli, userdata, rc: print(f"MQTT: disconnected rc={rc}")
+
+            # Install message handler (external if provided)
+            client.on_message = self.__custom_on_message or _default_on_message
+
+            # Connect & start loop
+            client.connect(self.__broker, self.__port, keepalive=60)
+            client.loop_start()
+
+            self.__client = client
+            return {"message": "MQTT connected"}
+
+        except Exception as e:
+            print(f"MQTT: failed to connect: {e}")
+            return {"error": str(e)}
+
+    async def subscribe(self, topic: str, qos: int = 0):
+        """Optional convenience: subscribe to another topic."""
+        if not self.__client:
+            return {"error": "MQTT not connected"}
+        try:
+            self.__client.subscribe(topic, qos=qos)
+            return {"message": f"subscribed to {topic}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def publish(self, topic: str, payload: str | bytes, qos: int = 0, retain: bool = False):
+        """Optional convenience: publish helper."""
+        if not self.__client:
+            return {"error": "MQTT not connected"}
+        try:
+            r = self.__client.publish(topic, payload=payload, qos=qos, retain=retain)
+            # r.wait_for_publish()  # optional blocking confirmation
+            return {"message": "published", "mid": r.mid}
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def disconnect(self):
+        """Gracefully stop loop + disconnect. Safe to call multiple times."""
+        cli = self.__client
+        if cli is not None:
+            try:
+                cli.loop_stop()
+            except Exception:
+                pass
+            try:
+                cli.disconnect()
+            except Exception:
+                pass
+        self.__client = None
+
+    # ---------- GC fallback ----------
     def __del__(self):
-        if self.__client:
-            self.__client.loop_stop()
-            self.__client.disconnect()
-            self.__client = None
-
-
+        # Best-effort, in case caller forgot to call disconnect()
+        try:
+            if self.__client:
+                self.__client.loop_stop()
+                self.__client.disconnect()
+        except Exception:
+            pass
+        self.__client = None
 
 class MQTT_Tables:
     def __init__(self, mqtt_class,webObj,driver):
@@ -1237,7 +1149,6 @@ class MQTT_Tables:
         self.__driver_name = driver
         self.__app=mqtt_class.get_app()
         self.__client=None
-        self.__web=webObj
         self.__topic=mqtt_class.get_topic()
         self.__msg=''
         self.__mqtt=mqtt_class
@@ -1296,6 +1207,45 @@ class MQTT_Tables:
         }
         self.__driver_name=driver
         self.create_routes()
+
+        # --- Decide CSV sink (R2 vs local) ---
+        self.__csv_logger = None
+        self.__local_log_path = None
+
+        driver_csv_name = (
+            self.__driver_name
+            if str(self.__driver_name).lower().endswith(".csv")
+            else f"{self.__driver_name}.csv"
+        )
+
+        # ✅ always use telemetry-data-files bucket when R2 is enabled
+        R2_BUCKET = "telemetry-data-files"
+        R2_PREFIX = "sessions"   # folder inside bucket (optional but recommended)
+
+        driver_csv_name = f"{self.__driver_name}.csv"
+
+                # --- R2 logging if enabled ---
+        if r2.is_r2_enabled():
+            r2_key = f"{r2.R2_DATA_PREFIX}{driver_csv_name}".lstrip("/")
+            try:
+                self.__csv_logger = r2.R2BufferedCSVLogger(r2.R2_BUCKET_DATA, r2_key)
+                print(f"[R2] Logging CSV to s3://{r2.R2_BUCKET_DATA}/{r2_key}")
+            except Exception as e:
+                print(f"[R2] Failed, falling back to local storage: {e}")
+                self.__csv_logger = None
+        else:
+            self.__csv_logger = None
+
+        # --- LOCAL fallback ---
+        if not self.__csv_logger:
+            data_dir = os.getenv(
+                "DATA_DIR",
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_files")
+            )
+            os.makedirs(data_dir, exist_ok=True)
+            self.__local_log_path = os.path.join(data_dir, driver_csv_name)
+
+            print(f"[LOCAL] Logging CSV to {self.__local_log_path}")
 
     def create_routes(self):
         self.__app.add_api_route("/get-data", self.get_data, methods=["GET"])
@@ -1374,7 +1324,38 @@ class MQTT_Tables:
         # roll forward
         self.__prev_pos = self.__curr_pos
 
-    
+    async def shutdown(self):
+        """
+        Stop periodic update loop, flush/close CSV sink (R2/local),
+        stop MQTT connection, and stop WebSocket server.
+        Safe to call multiple times.
+        """
+        # stop the WebSocket broadcast loop (if running)
+        try:
+            await self.stop_socket()
+        except Exception:
+            pass
+
+        # close R2/local CSV logger if present
+        try:
+            if hasattr(self, "_MQTT_Tables__csv_logger") and self.__csv_logger:
+                self.__csv_logger.close()
+                self.__csv_logger = None
+        except Exception as e:
+            print(f"[shutdown] CSV logger close failed: {e}")
+
+        # disconnect MQTT
+        try:
+            await self.__mqtt.disconnect()
+        except Exception as e:
+            print(f"[shutdown] MQTT disconnect failed: {e}")
+
+        # stop WS server (if you own/control it here)
+        try:
+            if hasattr(self, "_MQTT_Tables__web") and self.__web:
+                await self.__web.stop_websocket()
+        except Exception as e:
+            print(f"[shutdown] WebSocket stop failed: {e}")
 
     def haversine_distance(self, lat1, lon1, lat2, lon2):
         R = 6371000  # Radius of Earth in meters
@@ -1613,8 +1594,14 @@ class MQTT_Tables:
 
         # 2) persist full row to CSV
         
-        with open(f"{self.__driver_name}", "a", newline="") as f:
-            csv.writer(f).writerow(parts)
+        row_str = ",".join(parts)
+
+        if r2.is_r2_enabled() and isinstance(self.__csv_logger, r2.R2BufferedCSVLogger):
+            self.__csv_logger.write_row(row_str)
+        else:
+            with open(self.__local_log_path, "a", encoding="utf-8") as f:
+                f.write(row_str + "\n")
+
 
         # 3) extract timestamp and CAN ID
         timestamp = parts[0]
@@ -1643,11 +1630,11 @@ class MQTT_Tables:
 
 
     def __del__(self):
-        print("Destructor called for MQTT_Tables")
-        if self.__client:
-            self.__client.loop_stop() 
-            for el in self.__tables:
-                el=None
+        try:
+            if self.__csv_logger:
+                self.__csv_logger.close()
+        except Exception as e:
+            print(f"[R2] close failed: {e}")
 
 
 
