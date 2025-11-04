@@ -1,0 +1,6 @@
+[env]
+  R2_ENABLED = "true"
+  R2_BUCKET_DB = "fs-db"
+  R2_BUCKET_DATA = "fs-data"
+  R2_DB_PREFIX = "db/"
+  R2_DATA_PREFIX = "data/"

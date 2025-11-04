@@ -107,7 +107,7 @@ function MqttAuth() {
                             id="Port"
                             name="Port"
                             type="number"
-                            defaultValue={8883}
+                            defaultValue={1883}
                             required
                             className="mt-1 block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 focus:outline-2 focus:outline-indigo-600"
                         />

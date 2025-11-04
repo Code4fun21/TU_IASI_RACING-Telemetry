@@ -82,5 +82,12 @@
         "sessionId": 15,
         "date": "2025-11-04",
         "time": "10:04:44"
+    },
+    {
+        "csvFile": "Bacau_2025-11-04_10-18-48.csv",
+        "trackId": 1,
+        "sessionId": 16,
+        "date": "2025-11-04",
+        "time": "10:18:48"
     }
 ]

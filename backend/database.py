@@ -1,261 +1,208 @@
+from __future__ import annotations
+
+import os
 import json
 from datetime import datetime
-from fastapi import Request
-import os
-from fastapi import Query
-from typing import Union, Any
-'''Drivers''' 
+from typing import Union
+
+from fastapi import Request, Query
+
+# R2 helpers (you said you already have these)
+from r2_storage import get_json, put_json
+
+# -------- R2 / local storage helpers --------
+R2_ON = os.getenv("R2_ENABLED", "false").lower() == "true"
+B_DB  = os.getenv("R2_BUCKET_DB", "")
+P_DB  = os.getenv("R2_DB_PREFIX", "db/")  # e.g. "db/"
+
+def _r2_key(local_filename: str) -> str:
+    return f"{P_DB}{local_filename}"
+
+def load_json_list(filename: str):
+    """Read a list-like JSON either from R2 (if enabled) or local file."""
+    if R2_ON:
+        data = get_json(B_DB, _r2_key(filename))
+        return data or []
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_json_list(filename: str, data_list):
+    """Write list-like JSON to R2 or local file."""
+    if R2_ON:
+        put_json(B_DB, _r2_key(filename), data_list)
+        return
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data_list, f, ensure_ascii=False, indent=4)
+
+# ===================== Drivers =====================
+
 async def add_driver(request: Request):
     try:
         data = await request.json()
         drivers = load_json_list("drivers.json")
-        drivers.append(data)
-        # Auto-generate a new car ID if not provided
-        existing_ids = [driver.get("driverId", 0) for driver in drivers]
-        new_id = max(existing_ids, default=0) + 1
-        data["weight"]=int(data["weight"])
-        # Assign the ID (if missing)
-        data.setdefault("driverId", new_id)
+
+        # assign numeric weight if present
+        if "weight" in data:
+            try:
+                data["weight"] = int(data["weight"])
+            except Exception:
+                pass
+
+        # allocate ID once, then append once
+        existing_ids = [int(d.get("driverId", 0)) for d in drivers]
+        data.setdefault("driverId", (max(existing_ids, default=0) + 1))
 
         drivers.append(data)
         save_json_list("drivers.json", drivers)
 
-        return {
-            "message": "Setup added successfully",
-            "driver": {**data, "id": data["driverId"]} 
-        }
+        return {"message": "Driver added", "driver": {**data, "id": data["driverId"]}}
     except Exception as e:
         return {"error": str(e)}
 
-
-
-async def get_driver(id:int):
+async def get_driver(id: int):
     try:
-        with open("drivers.json", mode='r') as openedFile:
-            drivers = json.load(openedFile)  
-            for driver in drivers:
-                #   print(driver["driverId"],id,driver["driverId"]==id)
-                  if driver["driverId"]==id:
-                        return driver
-        return{f"No driver with the id {id}"}
+        drivers = load_json_list("drivers.json")
+        for d in drivers:
+            if int(d.get("driverId", -1)) == int(id):
+                return d
+        return {"error": f"No driver with id {id}"}
     except Exception as e:
-                return {"Error": str(e)}  
-    
+        return {"error": str(e)}
 
 async def get_all_drivers():
-    # print("drivers")
     drivers = load_json_list("drivers.json")
-    for driver in drivers:
-        driver["id"] = driver.pop("driverId")  # Rename key
+    for d in drivers:
+        d["id"] = d.pop("driverId", d.get("id"))
     return drivers
 
+# ===================== Tracks =====================
 
-
-
-'''Track'''   
 async def add_track(request: Request):
     try:
         data = await request.json()
         tracks = load_json_list("tracks.json")
-
-        # Auto-generate a new car ID if not provided
-        existing_ids = [track.get("trackId", 0) for track in tracks]
-        new_id = max(existing_ids, default=0) + 1
-
-        # Assign the ID (if missing)
-        data.setdefault("trackId", new_id)
-
+        existing_ids = [int(t.get("trackId", 0)) for t in tracks]
+        data.setdefault("trackId", (max(existing_ids, default=0) + 1))
         tracks.append(data)
         save_json_list("tracks.json", tracks)
-
-        return {
-            "message": "Setup added successfully",
-            "car": {**data, "id": data["trackId"]} 
-        }
+        return {"message": "Track added", "track": {**data, "id": data["trackId"]}}
     except Exception as e:
         return {"error": str(e)}
 
-async def get_track(id):
-    # print(f"track{id}")
+async def get_track(id: int):
     try:
-        with open("tracks.json", mode='r') as openedFile:
-            tracks = json.load(openedFile)  
-            for track in tracks:
-                if track["trackId"]==int(id):
-                    return track
-            return{f"No track with the id {id}"}
+        tracks = load_json_list("tracks.json")
+        for t in tracks:
+            if int(t.get("trackId", -1)) == int(id):
+                return t
+        return {"error": f"No track with id {id}"}
     except Exception as e:
-                return {"Error": str(e)}
-    
+        return {"error": str(e)}
+
 async def get_all_tracks():
     tracks = load_json_list("tracks.json")
-    for track in tracks:
-        track["id"] = track.pop("trackId")  # Rename key
+    for t in tracks:
+        t["id"] = t.pop("trackId", t.get("id"))
     return tracks
 
-
-'''Car'''
-
-   
+# ===================== Cars =====================
 
 async def add_car(request: Request):
     try:
         data = await request.json()
         cars = load_json_list("car_setups.json")
-
-        # Auto-generate a new car ID if not provided
-        existing_ids = [car.get("carId", 0) for car in cars]
-        new_id = max(existing_ids, default=0) + 1
-
-        # Assign the ID (if missing)
-        data.setdefault("carId", new_id)
-
+        existing_ids = [int(c.get("carId", 0)) for c in cars]
+        data.setdefault("carId", (max(existing_ids, default=0) + 1))
         cars.append(data)
         save_json_list("car_setups.json", cars)
-
-        return {
-            "message": "Setup added successfully",
-            "car": {**data, "id": data["carId"]}  
-        }
+        return {"message": "Car setup added", "car": {**data, "id": data["carId"]}}
     except Exception as e:
         return {"error": str(e)}
 
-
-async def get_car(id):
+async def get_car(id: int):
     try:
-        with open("car_setups.json", mode='r') as openedFile:
-            setups = json.load(openedFile)  
-            for setup in setups:
-                  if setup["carId"]==id:
-                        return setup
-            return{f"No setup with the id {id}"}
+        cars = load_json_list("car_setups.json")
+        for c in cars:
+            if int(c.get("carId", -1)) == int(id):
+                return c
+        return {"error": f"No car with id {id}"}
     except Exception as e:
-                return {"Error": str(e)}
-    
+        return {"error": str(e)}
 
 async def get_all_cars():
     cars = load_json_list("car_setups.json")
-    for car in cars:
-        car["id"] = car.pop("carId")  # Rename key
+    for c in cars:
+        c["id"] = c.pop("carId", c.get("id"))
     return cars
 
-    
+# ===================== Timestamps =====================
 
-
-
-'''Timestamps'''
 async def add_timestemp(request: Request):
     try:
         data = await request.json()
-        timestemps = load_json_list("timestemps.json")
-        print(timestemps)
-        # Auto-generate a new car ID if not provided
-        existing_ids = [timestemp.get("timestempId", 0) for timestemp in timestemps]
-        new_id = max(existing_ids, default=0) + 1
-        # Assign the ID (if missing)
-        data.setdefault("timestempId", new_id)
-        
-        # data["driverId"]=int(data["driverId"])
-        # data["setupId"]=int(data["setupId"])
-        # data["sessionsId"]=int(data["sessionsId"])
-        
-        timestemps.append(data)
-        save_json_list("timestemps.json", timestemps)
-        return {
-            "message": "Timestamp added successfully",
-            "timestamp": {**data, "id": data["timestempId"]} 
-        }
+        stamps = load_json_list("timestemps.json")
+        existing_ids = [int(s.get("timestempId", 0)) for s in stamps]
+        data.setdefault("timestempId", (max(existing_ids, default=0) + 1))
+        stamps.append(data)
+        save_json_list("timestemps.json", stamps)
+        return {"message": "Timestamp added", "timestamp": {**data, "id": data["timestempId"]}}
     except Exception as e:
         return {"error": str(e)}
 
-async def get_timestemp(column: str,value: Union[int, str] = Query(...)):
-    results: list[dict] = []
-    # print(column, value)
+async def get_timestemp(column: str, value: Union[int, str] = Query(...)):
     try:
-        with open("timestemps.json", "r") as f:
-            timestamps = json.load(f)
-        for ts in timestamps:
-            # compare as strings (or cast to int if you know it’s numeric)
+        stamps = load_json_list("timestemps.json")
+        out = []
+        for ts in stamps:
             cell = ts.get(column)
-            print(cell)
-            # print(cell)
             if cell == value or str(cell) == str(value):
-                results.append(ts)
-        return results
+                out.append(ts)
+        return out
     except Exception as e:
-                return {"Error": str(e)}
-    
+        return {"error": str(e)}
+
 async def get_all_timestemps():
-    timestemps = load_json_list("timestemps.json")
-    for timestemp in timestemps:
-        timestemp["id"] = timestemp.pop("timestempId")  # Rename key
-    return timestemps
+    stamps = load_json_list("timestemps.json")
+    for s in stamps:
+        s["id"] = s.pop("timestempId", s.get("id"))
+    return stamps
 
-
-
-'''Session'''
+# ===================== Sessions =====================
 
 async def add_session(request: Request):
     try:
         data = await request.json()
         sessions = load_json_list("sessions.json")
+        existing_ids = [int(s.get("sessionId", 0)) for s in sessions]
+        data.setdefault("sessionId", (max(existing_ids, default=0) + 1))
 
-        # Auto-generate a new session ID if not provided
-        existing_ids = [session.get("sessionId", 0) for session in sessions]
-        new_id = max(existing_ids, default=0) + 1
-
-        # Assign the ID (if missing)
-        data.setdefault("sessionId", new_id)
-
-        # Add date and time
         now = datetime.now()
-        data["date"] = now.strftime("%Y-%m-%d")   # e.g., "2025-07-05"
-        data["time"] = now.strftime("%H:%M:%S")   # e.g., "14:32:08"
-        # print(data)
-        sessions.append(data)
-        
-        save_json_list("sessions.json", sessions)
+        data.setdefault("date", now.strftime("%Y-%m-%d"))
+        data.setdefault("time", now.strftime("%H:%M:%S"))
 
-        return {
-            "message": "Setup added successfully",
-            "sessionData": {**data}
-        }
+        sessions.append(data)
+        save_json_list("sessions.json", sessions)
+        return {"message": "Session added", "sessionData": {**data}}
     except Exception as e:
         return {"error": str(e)}
 
-
-    
-
-async def get_session(id:int):
+async def get_session(id: int):
     try:
-        with open("sessions.json", mode='r') as openedFile:
-            setups = json.load(openedFile)  
-            for setup in setups:
-                  if setup["sessionId"]==id:
-                        return setup
-            return{f"No session with the id {id}"}
+        sessions = load_json_list("sessions.json")
+        for s in sessions:
+            if int(s.get("sessionId", -1)) == int(id):
+                return s
+        return {"error": f"No session with id {id}"}
     except Exception as e:
-                return {"Error": str(e)}    
-    
+        return {"error": str(e)}
 
 async def get_all_session():
     sessions = load_json_list("sessions.json")
-    for session in sessions:
-        session["id"] = session.pop("sessionId")  # Rename key
+    for s in sessions:
+        s["id"] = s.pop("sessionId", s.get("id"))
     return sessions
-    
-
-
-
-def load_json_list(filename):
-    if os.path.exists(filename):
-        with open(filename, "r") as file:
-            try:
-                return json.load(file)
-            except json.JSONDecodeError:
-                return []
-    return []
-
-def save_json_list(filename, data_list):
-    with open(filename, "w") as file:
-        json.dump(data_list, file, indent=4)

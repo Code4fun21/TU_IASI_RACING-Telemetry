@@ -1,12 +1,20 @@
-1) Run one of the following commands to install al the libraries that are needed: 
+1) Run the following command to install al the libraries that are needed: pip install fastapi pandas numpy paho-mqtt aiohttp websockets uvicorn
 
-	pip install fastapi "uvicorn[standard]" python-socketio aiohttp numpy numpy pandas lttb pydantic python-dotenv
+2) run this command to start the API server: python -m uvicorn classes:app --reload
 
-	pip3 install fastapi "uvicorn[standard]" python-socketio aiohttp numpy numpy pandas lttb pydantic python-dotenv
+FILE DATA:
+    1)http://127.0.0.1:8000/create-csv
+    {"files":"data.csv,data1.csv,data.csv"}
+   
+    3)http://127.0.0.1:8000/create-table?file_no=0  (0 is the index for the file you want to extract data from)
+    4)http://127.0.0.1:8000/get-table?file_no=0  (0 is the index for the table you want to see the data from)
 
-2) Run chmod +x setup_mac.sh./setup_mac.sh in the TU_IASI_RACING-TELEMETRY
 
-2) Run start_up.py
-
-
-
+MQTT DATA:
+    1)http://127.0.0.1:8000/create-mqtt
+    {"broker":  "mqtt.eclipseprojects.io", "port": 1883, "topic": "python/mqtt", "client_id": "default_client","driver":"driver1"}
+    2)python client_test.py
+    6)python write_mqtt.py
+    //7)http://127.0.0.1:8000/stop-websocket
+    
+    Retrieve all data received from the MQTT server: http://127.0.0.1:8000/get-data

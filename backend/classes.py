@@ -102,8 +102,11 @@ class App:
         self.__app.add_api_route("/api/sessions", database.get_all_session, methods=["GET"])
 
     async def get_csv_files(self):
-        parent_folder = os.path.dirname(os.path.abspath(__file__))
-        csv_files = glob.glob(os.path.join(parent_folder, "*.csv"))
+        # path to /backend/data_files
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data_files")
+
+        csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+
         csv_files_info = [
             {
                 "filename": os.path.basename(file),
@@ -111,6 +114,7 @@ class App:
             }
             for file in csv_files
         ]
+
         return {"csv_files": csv_files_info}
 
     async def save_gates(self, request: Request):
