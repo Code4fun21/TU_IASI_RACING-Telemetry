@@ -1,0 +1,16 @@
+[
+    {
+        "name": "1",
+        "tires": "a",
+        "details": "a",
+        "otherInformation": "a",
+        "carId": 1
+    },
+    {
+        "name": "session2",
+        "tires": "wet",
+        "details": "",
+        "otherInformation": "",
+        "carId": 2
+    }
+]

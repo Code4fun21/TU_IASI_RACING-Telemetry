@@ -1,0 +1,233 @@
+[
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:11:05.653Z",
+        "endTime": "2025-07-27T16:11:07.891Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 1
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:12:11.235Z",
+        "endTime": "2025-07-27T16:12:11.763Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 2
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:12:24.326Z",
+        "endTime": "2025-07-27T16:12:25.886Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 3
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:22:05.589+03:00",
+        "endTime": "2025-07-27T16:22:07.598+03:00",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 4
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:22:05.589+03:00",
+        "endTime": "2025-07-27T16:22:07.648+03:00",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 5
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:22:12.585+03:00",
+        "endTime": "2025-07-27T16:22:13.549+03:00",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 6
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T19:26:20.208Z",
+        "endTime": "2025-07-27T19:26:23.706Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 7
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T19:26:33.704Z",
+        "endTime": "2025-07-27T19:26:41.052Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 8
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:54:35.007Z",
+        "endTime": "2025-07-27T16:54:46.777Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 9
+    },
+    {
+        "sessionId": 17,
+        "startTime": "2025-07-27T16:56:21.012Z",
+        "endTime": "2025-07-27T16:56:22.667Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 10
+    },
+    {
+        "sessionId": 18,
+        "startTime": "2025-07-31T12:46:48.599Z",
+        "endTime": "2025-07-31T12:46:58.278Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 11
+    },
+    {
+        "sessionId": 18,
+        "startTime": "2025-07-31T12:47:00.017Z",
+        "endTime": "2025-07-31T12:47:29.807Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 12
+    },
+    {
+        "sessionId": 18,
+        "startTime": "2025-07-31T12:47:32.028Z",
+        "endTime": "2025-07-31T12:48:16.666Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 13
+    },
+    {
+        "sessionId": 5,
+        "startTime": "2025-08-05T17:12:10.494Z",
+        "endTime": "2025-08-05T17:13:23.813Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 14
+    },
+    {
+        "sessionId": 5,
+        "startTime": "2025-08-05T17:13:28.420Z",
+        "endTime": "2025-08-05T17:14:32.831Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 15
+    },
+    {
+        "sessionId": 5,
+        "startTime": "2025-08-05T17:14:35.392Z",
+        "endTime": "2025-08-05T17:16:08.657Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 16
+    },
+    {
+        "sessionId": 5,
+        "startTime": "2025-08-05T17:16:12.327Z",
+        "endTime": "2025-08-05T17:17:29.965Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 17
+    },
+    {
+        "sessionId": 5,
+        "startTime": "2025-08-05T17:17:33.274Z",
+        "endTime": "2025-08-05T17:18:52.351Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 18
+    },
+    {
+        "sessionId": 6,
+        "startTime": "2025-08-06T11:02:53.770Z",
+        "endTime": "2025-08-06T11:03:02.145Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 19
+    },
+    {
+        "sessionId": 6,
+        "startTime": "2025-08-06T11:03:04.366Z",
+        "endTime": "2025-08-06T11:03:13.706Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 20
+    },
+    {
+        "sessionId": 6,
+        "startTime": "2025-08-06T11:03:16.077Z",
+        "endTime": "2025-08-06T11:03:29.594Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 21
+    },
+    {
+        "sessionId": 10,
+        "startTime": "2025-10-21T12:45:11.868Z",
+        "endTime": "2025-10-21T12:45:45.848Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 22
+    },
+    {
+        "sessionId": 14,
+        "startTime": "2025-10-21T15:06:44.218Z",
+        "endTime": "2025-10-21T15:06:48.226Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 23
+    },
+    {
+        "sessionId": 21,
+        "startTime": "2025-11-04T22:30:32.356Z",
+        "endTime": "2025-11-04T22:30:43.115Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 24
+    },
+    {
+        "sessionId": 21,
+        "startTime": "2025-11-04T22:30:45.930Z",
+        "endTime": "2025-11-04T22:30:48.328Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 25
+    },
+    {
+        "sessionId": 22,
+        "startTime": "2025-11-04T22:44:35.360Z",
+        "endTime": "2025-11-04T22:44:40.426Z",
+        "driverId": 1,
+        "setupId": 1,
+        "timestempId": 26
+    },
+    {
+        "sessionId": 22,
+        "startTime": "2025-11-04T22:44:45.073Z",
+        "endTime": "2025-11-04T22:44:48.842Z",
+        "driverId": 2,
+        "setupId": 1,
+        "timestempId": 27
+    },
+    {
+        "sessionId": 24,
+        "startTime": "2025-11-05T08:06:31.182Z",
+        "endTime": "2025-11-05T08:09:37.102Z",
+        "driverId": 5,
+        "setupId": 2,
+        "timestempId": 28
+    },
+    {
+        "startTime": "2025-11-05T08:11:08.074Z",
+        "endTime": "2025-11-05T08:14:33.791Z",
+        "driverId": 5,
+        "setupId": 2,
+        "timestempId": 29
+    }
+]

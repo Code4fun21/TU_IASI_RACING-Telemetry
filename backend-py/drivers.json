@@ -1,0 +1,35 @@
+[
+    {
+        "driverId": 1,
+        "name": "serban",
+        "weight": 55,
+        "other": "incepator"
+    },
+
+    {
+        
+        "name": "Vlad",
+        "weight": 93,
+        "other": "-",
+        "driverId": 3
+    },
+    {
+        "name": "Bogdan",
+        "weight": 1,
+        "other": "",
+        "driverId": 4
+    },
+
+    {
+        "name": "Alex",
+        "weight": 2,
+        "other": "",
+        "driverId": 5
+    },
+    {
+        "name": "Alex",
+        "weight": 2,
+        "other": "",
+        "driverId": 5
+    }
+]
