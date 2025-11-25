@@ -7,7 +7,7 @@ export const api = {
   // --- 1. UPLOAD FILE ---
   // We send the raw file to the worker, which streams it to R2
   uploadFile: async (file: File) => {
-    console.log(API_URL)
+    
     const formData = new FormData();
     formData.append('file', file);
     
@@ -21,7 +21,7 @@ export const api = {
 
   // --- 2. SAVE METADATA ---
   saveSession: async (sessionData: Session) => {
-    
+    console.log(sessionData)
     const response = await axios.post<{ success: boolean; id: number }>(
       `${API_URL}/sessions`, 
       sessionData

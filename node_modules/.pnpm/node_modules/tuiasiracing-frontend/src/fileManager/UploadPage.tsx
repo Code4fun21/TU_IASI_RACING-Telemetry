@@ -23,7 +23,7 @@ export default function UploadPage() {
     if (!selectedFile) return;
 
     setFile(selectedFile);
-
+    
     // Parse immediately for preview
     Papa.parse(selectedFile, {
       header: true,
@@ -39,6 +39,22 @@ export default function UploadPage() {
     });
   };
 
+  const convertUnixToDate = (unixTimestamp:number) => {
+    // 1. Check if timestamp is in seconds (10 digits) or milliseconds (13 digits)
+    // Most Unix timestamps are in seconds, but JS Date expects milliseconds.
+    const timestamp = String(unixTimestamp).length === 10 
+      ? unixTimestamp * 1000 
+      : unixTimestamp;
+
+    const dateObj = new Date(timestamp);
+
+    return {
+      date: dateObj.toLocaleDateString(), // e.g. "11/18/2025" (depends on user locale)
+      time: dateObj.toLocaleTimeString(), // e.g. "8:00:00 PM"
+      full: dateObj.toLocaleString()      // Both combined
+    };
+  };
+
   // 2. Upload & Save
   const handleSave = async () => {
     if (!file) return;
@@ -47,15 +63,13 @@ export default function UploadPage() {
     try {
       // A. Upload File to R2 via Worker
       const storedFileName = await api.uploadFile(file);
-
+      const fileDate_Time=convertUnixToDate(file.lastModified);
       // B. Save Metadata to D1
       const sessionMeta: Session = {
         csvFileName: storedFileName,
-        driverId: Number(driverId),
         trackId: Number(trackId),
-        monopostId: Number(monopostId),
-        startTime: Date.now(), // You might want to parse this from the CSV later
-        endTime: Date.now() + 1000, 
+        date: fileDate_Time.date,
+        time: fileDate_Time.time
       };
 
       await api.saveSession(sessionMeta);
@@ -102,29 +116,11 @@ export default function UploadPage() {
         {/* Metadata Inputs */}
         <div className="grid grid-cols-3 gap-4 mb-6">
           <div>
-            <label className="block text-xs mb-1">Driver ID</label>
-            <input 
-              type="number" 
-              value={driverId}
-              onChange={e => setDriverId(e.target.value)}
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          <div>
             <label className="block text-xs mb-1">Track ID</label>
             <input 
               type="number" 
               value={trackId}
               onChange={e => setTrackId(e.target.value)}
-              className="w-full bg-gray-700 rounded p-2 text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-xs mb-1">Car ID</label>
-            <input 
-              type="number" 
-              value={monopostId}
-              onChange={e => setMonopostId(e.target.value)}
               className="w-full bg-gray-700 rounded p-2 text-white"
             />
           </div>

@@ -15,9 +15,11 @@
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/react-query": "^5.66.5",
     "@telemetry/shared": "workspace:*",
+    "@types/mqtt": "^2.5.0",
     "@types/papaparse": "^5.5.0",
     "axios": "^1.7.9",
     "echarts": "^5.6.0",
+    "mqtt": "^5.14.1",
     "papaparse": "^5.5.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -27,7 +29,8 @@
     "scichart": "^3.5.711",
     "scichart-react": "^0.1.9",
     "socket.io-client": "^4.8.1",
-    "tailwindcss": "^4.0.0"
+    "tailwindcss": "^4.0.0",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

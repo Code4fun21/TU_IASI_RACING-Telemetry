@@ -4,7 +4,7 @@ import { z } from 'zod';
 export const DriverSchema = z.object({
   driverId: z.number().optional(), // Optional because new drivers won't have an ID yet
   name: z.string().min(1, "Name is required"),
-  greutate: z.number().optional(), // 'Weight' in Romanian
+  weight: z.number().optional(), // 'Weight' in Romanian
   other: z.string().optional(),
 });
 
@@ -21,18 +21,25 @@ export const MonopostSchema = z.object({
   monopostId: z.number().optional(),
   details: z.string().optional(),
   other: z.string().optional(),
-  cauciucuri: z.string().optional(), // 'Tires'
+  tires: z.string().optional(), // 'Tires'
 });
 
 // --- 4. SESSION SCHEMA (The most important one) ---
 export const SessionSchema = z.object({
   id: z.number().optional(),
   csvFileName: z.string(), // The link to R2
-  monopostId: z.number(),
   trackId: z.number(),
-  driverId: z.number(),    // From RaceTimeStamps, linking session to driver
-  startTime: z.number(),   // Unix timestamp
-  endTime: z.number(),     // Unix timestamp
+  date: z.string(),
+  time: z.string(),
+});
+
+export const TimestampSchema = z.object({
+  id: z.number().optional(),
+  startTime: z.number(),
+  endTime: z.number(),
+  driverId: z.number(),
+  monopostId: z.number(),
+  sessionId: z.number(),
 });
 
 // --- 5. API RESPONSE TYPES ---
@@ -48,4 +55,5 @@ export type Driver = z.infer<typeof DriverSchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type Monopost = z.infer<typeof MonopostSchema>;
 export type Session = z.infer<typeof SessionSchema>;
+export type Timestamp=z.infer<typeof TimestampSchema>;
 export type UploadUrlResponse = z.infer<typeof UploadUrlResponseSchema>;

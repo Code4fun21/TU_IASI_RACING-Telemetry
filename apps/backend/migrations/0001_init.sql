@@ -29,16 +29,34 @@ CREATE TABLE Monopost (
 CREATE TABLE Session (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     csvFileName TEXT NOT NULL,
+    trackId INTEGER,
+    date TEXT,  -- Stores 'YYYY-MM-DD'
+    time TEXT,  -- Stores 'HH:MM:SS'    
+    FOREIGN KEY (trackId) REFERENCES Track(id)
+    
+);
+
+-- 5. Timestamps
+CREATE TABLE Timestamp(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     startTime INTEGER, -- Unix Timestamp
     endTime INTEGER,   -- Unix Timestamp
     driverId INTEGER,
-    trackId INTEGER,
     monopostId INTEGER,
+    sessionId INTEGER,
+    FOREIGN KEY (sessionId) REFERENCES Session(id),
     FOREIGN KEY (driverId) REFERENCES Driver(id),
-    FOREIGN KEY (trackId) REFERENCES Track(id),
     FOREIGN KEY (monopostId) REFERENCES Monopost(id)
 );
 
+
+/*startTime INTEGER, -- Unix Timestamp
+    endTime INTEGER,   -- Unix Timestamp
+    driverId INTEGER,
+    monopostId INTEGER,
+    FOREIGN KEY (driverId) REFERENCES Driver(id),
+    FOREIGN KEY (monopostId) REFERENCES Monopost(id)
+*/
 -- Seed some initial data (Optional, helps with testing)
 INSERT INTO Driver (name, weight) VALUES ('Test Driver', 75.5);
 INSERT INTO Track (name) VALUES ('Test Track');
