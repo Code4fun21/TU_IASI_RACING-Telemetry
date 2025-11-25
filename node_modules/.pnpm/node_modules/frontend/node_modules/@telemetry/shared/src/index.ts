@@ -49,6 +49,14 @@ export const UploadUrlResponseSchema = z.object({
   fileName: z.string(),
 });
 
+export const MqttAuthSchema=z.object({
+  trackId: z.number(),
+  broker: z.string(),
+  port: z.number(),
+  topic: z.string(),
+  fileName:z.string()
+});
+
 // --- EXPORT TYPES ---
 // This magic line converts the Zod schemas into TypeScript types automatically!
 export type Driver = z.infer<typeof DriverSchema>;
@@ -57,3 +65,4 @@ export type Monopost = z.infer<typeof MonopostSchema>;
 export type Session = z.infer<typeof SessionSchema>;
 export type Timestamp=z.infer<typeof TimestampSchema>;
 export type UploadUrlResponse = z.infer<typeof UploadUrlResponseSchema>;
+export type MqttAuth=z.infer<typeof MqttAuthSchema>;

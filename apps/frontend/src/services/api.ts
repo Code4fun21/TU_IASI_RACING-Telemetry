@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Session, Driver, Track, Monopost } from '@telemetry/shared';
+import type { Session, Driver, Track, Monopost, MqttAuth } from '@telemetry/shared';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -39,6 +39,13 @@ export const api = {
   downloadFile: async (fileName: string) => {
     const response = await axios.get(`${API_URL}/download/${fileName}`, {
       responseType: 'blob', // Important: tells axios to handle binary data
+    });
+    return response.data; // Returns a Blob (file-like object)
+  },
+
+    connectToTelemetry: async (payload:MqttAuth) => {
+    const response = await axios.get(`${API_URL}/connectToMqtt`, {
+      params: payload
     });
     return response.data; // Returns a Blob (file-like object)
   }

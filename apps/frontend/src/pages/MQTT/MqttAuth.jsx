@@ -4,7 +4,9 @@ import logo from "../../assets/tuiasilogo.png";
 import { useNavigate } from "react-router-dom";
 import RaceTrackSelect from "./Components/RaceTrackSelect";
 import { useState } from "react";
-import { connectToTelemetry,startTelemetry } from "../../api/endpoints";
+// import { connectToTelemetry,startTelemetry } from "../../api/endpoints";
+import { api } from "../../services/api";
+import { MqttService } from "../../services/MqttServices";
 
 
 
@@ -33,32 +35,35 @@ function MqttAuth() {
         // build filename
         const csvFile = `${raceTrack.name}_${dateStr}_${timeStr}.csv`;
         const session_payload={
-            csvFile:csvFile,
-            trackId:raceTrack.id
+            csvFileName:csvFile,
+            trackId:raceTrack.id,
+            date:dateStr,
+            time:timeStr
         }
         const mqtt_log_payload = {
             trackId: raceTrack.id,
             broker: formData.get("Broker"),
             port: Number(formData.get("Port")),
             topic: formData.get("topic"),
-            clientId: formData.get("client_id"),
-            fileName:session_payload.csvFile
+            fileName:session_payload.csvFileName
         };
         console.log("Connecting with payload:", mqtt_log_payload);
         try {
-            // Call the backend to establish the MQTT connection and create a session
-            const resp = await connectToTelemetry(mqtt_log_payload);
-            console.log("Backend response:", resp.data);
+            //old
+            // const resp = await connectToTelemetry(mqtt_log_payload);
+            //new
+            MqttService.connect(mqtt_log_payload);
+            // console.log("Backend response:", resp.data);
             
             
-             const sessionResp = await createSession(session_payload);
-            const { sessionId, csvFile } = sessionResp.data.sessionData;
+            const sessionResp = await api.saveSession(session_payload);
             
-            alert(`Connection successful! Session ${sessionId} started. Saving to ${csvFile}`);
+            
+            alert(`Connection successful! Session ${sessionResp.id} started. Saving to ${csvFile}`);
             // kick off the MQTT loop
-            await startTelemetry({ start: true });
-            // now navigate *and* carry sessionId along in location.state
-            navigate("/live-dashboard", {state: { sessionId, trackId: raceTrack.id }  });
+            // await startTelemetry({ start: true });
+            // // now navigate *and* carry sessionId along in location.state
+            // navigate("/live-dashboard", {state: { sessionId, trackId: raceTrack.id }  });
         } catch (err) {
             console.error("Failed to connect to telemetry backend", err?.response);
             // Provide user feedback on failure
@@ -121,19 +126,6 @@ function MqttAuth() {
                             name="topic"
                             type="text"
                             defaultValue="canbus/log"
-                            required
-                            className="mt-1 block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 focus:outline-2 focus:outline-indigo-600"
-                        />
-                    </div>
-                    <div>
-                        <label htmlFor="client_id" className="block text-sm font-medium text-gray-200">
-                            Client ID
-                        </label>
-                        <input
-                            id="client_id"
-                            name="client_id"
-                            type="text"
-                            defaultValue={`web-client-${Math.floor(Math.random() * 1000)}`}
                             required
                             className="mt-1 block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 focus:outline-2 focus:outline-indigo-600"
                         />
