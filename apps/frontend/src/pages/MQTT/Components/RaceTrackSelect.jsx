@@ -5,9 +5,9 @@ import { CheckIcon } from "@heroicons/react/20/solid";
 import PropTypes from "prop-types";
 
 const raceTracks = [
-    { id: 1, name: "Bacau" },
-    { id: 2, name: "Ungaria" },
+    { id: 2, name: "Bacau" },
     { id: 3, name: "Cehia" },
+    { id: 4, name: "Croatia" },
 ];
 
 export default function RaceTrackSelect({ onChange }) {

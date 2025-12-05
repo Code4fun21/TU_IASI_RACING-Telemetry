@@ -1,9 +1,14 @@
 import { useEffect, useState, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { useNavigate,useLocation } from "react-router-dom";
 import { useSocket } from "../../context/SocketContext";
-import { getTrackById } from "../../api/tracks.routes";
+import { api } from "../../services/api";
+// import { useMqttStore } from "../../store/MqttStore"; // The new store
+// import { MqttService } from "../../services/MqttService";
+import { useMqttStore } from "../../store/MqttStore";
+import { MqttService } from "../../services/MqttServices";
+import Papa from "papaparse";
 
-// chart imports…
+
 import RPMChart from "../../components/RPMChart";
 import SpeedChart from "../../components/SpeedChart";
 import BrakePressureChart from "../../components/BrakePressureChart";
@@ -112,12 +117,67 @@ export default function LiveDashboard() {
 
   const socket = useSocket();
   // grab sessionId from navigation state
+  const navigate = useNavigate();
   const location = useLocation();
   const { sessionId, trackId } = location.state || {};
   // console.log("LiveDashboard mounted with:", { sessionId, trackId });
   if (!sessionId) {
     console.warn("LiveDashboard mounted without sessionId!");
   }
+  const isConnected = useMqttStore((state) => state.isConnected);
+  const currentData = useMqttStore((state) => state.currentData); // Latest point for gauges/text
+  const dataBuffer = useMqttStore((state) => state.dataBuffer);   // Full history for saving
+  const clearBuffer = useMqttStore((state) => state.clearBuffer);
+
+  const [saving, setSaving] = useState(false);
+
+  // 3. Safety Check: If refreshed, we might lose connection. 
+  // Optionally redirect back to auth if disconnected.
+  useEffect(() => {
+    if (!isConnected) {
+      console.warn("MQTT Disconnected. Redirecting...");
+      // navigate("/mqtt-auth"); // Uncomment to enforce auth
+    }
+  }, [isConnected, navigate]);
+
+  const handleStopSession = async () => {
+    if (window.confirm("Are you sure you want to stop and save this session?")) {
+        setSaving(true);
+        
+        try {
+            // A. Disconnect MQTT
+            MqttService.disconnect();
+
+            // B. Convert Buffer to CSV
+            // We use Papaparse to unparse (JSON -> CSV)
+            const csv = Papa.unparse(dataBuffer);
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            
+            // Create a File object
+            const fileName = `Session_${sessionId}_${Date.now()}.csv`;
+            const file = new File([blob], fileName, { type: "text/csv" });
+
+            // C. Upload the File to R2
+            // We use the existing API we built in Step 5!
+            const storedFileName = await api.uploadFile(file);
+
+            // D. Update Metadata (Optional but recommended)
+            // If you want to update the 'endTime' or 'csvFileName' in the DB for this session
+            // You might need a new API endpoint: PATCH /api/sessions/:id
+            console.log("File uploaded to:", storedFileName);
+
+            alert("Session Saved Successfully!");
+            clearBuffer(); // Clean up memory
+            navigate("/"); // Go Home
+
+        } catch (error) {
+            console.error("Failed to save session:", error);
+            alert("Error saving session. Check console.");
+        } finally {
+            setSaving(false);
+        }
+    }
+  };
 
   const [trackData, setTrackData] = useState(null);
   const [gates, setGates] = useState([]);
@@ -126,45 +186,49 @@ export default function LiveDashboard() {
   useEffect(() => {
     if (!trackId) return;
 
-    getTrackById(trackId)
+    api.getTrackById(trackId)
       .then(async (res) => {
-        const td = res.data;
-        setTrackData(td);
-
-        // If the API gives you a string pointing to a .json resource,
-        // fetch it from your public/ folder (or wherever you host it).
-        if (typeof td.gates === "string" && td.gates.endsWith(".json")) {
-          try {
-            const resp = await fetch(td.gates[0] === '/' ? td.gates : `/${td.gates}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const gateArray = await resp.json();
-            setGates(gateArray);
-          } catch (err) {
-            console.error("Failed to fetch gates JSON:", err);
-            setGates([]);
+        const track = res;
+       try {
+          // --- 1. HANDLE GATES ---
+          // The DB sends gates as a JSON string: '[{"name":"S0",...}]'
+          // We convert it to a real Array.
+          let parsedGates = [];
+          if (typeof track.gates === 'string') {
+            parsedGates = JSON.parse(track.gates);
+          } else if (Array.isArray(track.gates)) {
+            parsedGates = track.gates;
           }
-        }
-        // If the API already inlines an array, use it directly:
-        else if (Array.isArray(td.gates)) {
-          setGates(td.gates);
-        }
-        else {
-          setGates([]);
+          setGates(parsedGates);
+
+          // --- 2. HANDLE LAYOUT (Coordinates) ---
+          // The DB sends coordinates as a JSON string: '{"type":"FeatureCollection",...}'
+          // We convert it to a real Object.
+          let parsedLayout = track.coordinates;
+          if (typeof track.coordinates === 'string') {
+             parsedLayout = JSON.parse(track.coordinates);
+          }
+
+          // --- 3. SET STATE ---
+          // We update trackData so 'coordinates' is now an Object, not a String
+          setTrackData({ ...track, coordinates: parsedLayout });
+
+        } catch (err) {
+          console.error("Error parsing JSON data from DB:", err);
+          setGates([]); 
         }
       })
-      .catch((err) => {
-        console.error("Could not load track data:", err);
-        setTrackData(null);
-        setGates([]);
-      });
   }, [trackId]);
 
 
-  // useEffect(()=>{
-  //   if(!gates) return;
-  //   console.log(gates)
-  // },[gates])
-
+  useEffect(()=>{
+    if(!gates) return;
+    console.log(gates)
+  },[gates])
+useEffect(()=>{
+    if(!trackData) return;
+    console.log(trackData)
+  },[trackData])
   const prev = useRef({ rpm: 0, GPS_Speed: 0, brakePressure: 0 });
   const [latestTelemetry, setLatestTelemetry] = useState(initialLatestData);
 
@@ -316,11 +380,7 @@ setLineDataVital(old => {
       }
     };
 //  console.log(mapped.GPS_Latitude,mapped.GPS_Longitudem,mapped.GPS_Speed)
-    socket.on("message", handleTelemetryUpdate);
 
-    return () => {
-      socket.off("message", handleTelemetryUpdate);
-    };
   }, [socket]);
 
   return (
@@ -341,19 +401,14 @@ setLineDataVital(old => {
       </div>
       <div className="mt-10 overflow-hidden rounded-lg bg-white p-6 shadow">
         <h3 className="text-lg font-medium text-gray-900 text-center mb-4">
-          GPS Data
+          Live Map
         </h3>
-        <MultiLineChart data={LineDataGPS} />
+        <MapChart geoData={trackData.coordinates} data={mapData} gates={gates}  height={400} />
       </div>  
-
+      
       <div className="mt-5 space-y-5">
         <dl className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="bg-white p-4 shadow rounded-lg">
-            <dt className="text-sm font-medium text-gray-500 text-center">
-              Live Map
-            </dt>
-            <MapChart data={mapData} gates={gates}  height={400} />
-          </div>
+          
           <div className="bg-white p-4 shadow rounded-lg flex justify-center">
             <RPMChart data={prev.current.rpm} height={300} width={300} />
           </div>

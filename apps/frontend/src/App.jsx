@@ -8,24 +8,23 @@ import MonopostInfoPage from "./pages/MonopostInfoPage";
 import LiveDashboard from "./pages/MQTT/LiveDashboard";
 import DataInput from "./pages/DataInput/DataInput";
 import AdvanceChartsOffline from "./pages/Offline/AdvanceChartsOffline";
-import LiveAdvanceCharts from "./pages/MQTT/MoreCharts/LiveAdvanceCharts";
 import MqttAuth from "./pages/MQTT/MqttAuth";
-// Make sure this import path matches where you actually saved the file
 import UploadPage from "./fileManager/UploadPage"; 
 
 // Context providers
-import { SocketProvider } from "./context/SocketContext";
+// DELETED: import { SocketProvider } from "./context/SocketContext"; 
 import { DriverProvider } from "./context/DriverContext";
 
 function App() {
     return (
+        // The DriverProvider is fine to keep for UI state (Driver Name, Weight, etc.)
         <DriverProvider>
-            <SocketProvider>
+            {/* REMOVED: <SocketProvider> - Not needed for MQTT/Zustand */}
                 <Router>
                     <Routes>
                         <Route path="/" element={<Home />} />
                         
-                        {/* --- NEW ROUTE ADDED HERE --- */}
+                        {/* Offline File Upload Mode */}
                         <Route path="add-file" element={<UploadPage />} />
 
                         <Route element={<Layout />}>
@@ -40,10 +39,12 @@ function App() {
                         </Route>
                         
                         <Route path="offline-files" element={<OfflineFiles />} />
+                        
+                        {/* Live MQTT Start Page */}
                         <Route path="mqtt-auth" element={<MqttAuth />} />
                     </Routes>
                 </Router>
-            </SocketProvider>
+            {/* REMOVED: </SocketProvider> */}
         </DriverProvider>
     );
 }

@@ -72,7 +72,6 @@ app.get('/api/sessions/:id', async (c) => {
 app.post('/api/sessions', async (c) => {
   const body = await c.req.json();
   const result = SessionSchema.safeParse(body);
-  console.log(body)
   if (!result.success) {
     return c.json({ error: result.error }, 400);
   }
@@ -168,15 +167,16 @@ app.post('/api/tracks', async (c)=>{
   const body = await c.req.json();
   const result=TrackSchema.safeParse(body);
   if(!result.success) return c.json({error:result.error})
-
   const track = result.data;
   await c.env.DB.prepare(
     'INSERT INTO Track (name, gates, coordinates) VALUES (?, ?, ?)'
   ).bind(
     track.name,
     track.gates,
-    track.trackCoordinates
+    track.coordinates
   ).run();
+
+  return c.json({ success: true });
 });
 
 // GET /api/tracks - ❌ NEW

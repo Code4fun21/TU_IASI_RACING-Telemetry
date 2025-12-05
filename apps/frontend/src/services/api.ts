@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type { Session, Driver, Track, Monopost, MqttAuth } from '@telemetry/shared';
+import { getTrackById } from '../api/tracks.routes';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
@@ -21,7 +22,7 @@ export const api = {
 
   // --- 2. SAVE METADATA ---
   saveSession: async (sessionData: Session) => {
-    console.log(sessionData)
+   
     const response = await axios.post<{ success: boolean; id: number }>(
       `${API_URL}/sessions`, 
       sessionData
@@ -43,10 +44,21 @@ export const api = {
     return response.data; // Returns a Blob (file-like object)
   },
 
-    connectToTelemetry: async (payload:MqttAuth) => {
+  connectToTelemetry: async (payload:MqttAuth) => {
     const response = await axios.get(`${API_URL}/connectToMqtt`, {
       params: payload
     });
     return response.data; // Returns a Blob (file-like object)
+  },
+
+  getTrackById: async(trackId: number)=>{
+    const response = await axios.get<Track>(`${API_URL}/tracks/${trackId}`,);
+    return response.data;
+  },
+    saveTrack: async (trackData: { name: string; gates: string; coordinates: string }) => {
+    // trackData.gates and .coordinates should be JSON strings
+    
+    const response = await axios.post(`${API_URL}/tracks`, trackData);
+    return response.data;
   }
 };

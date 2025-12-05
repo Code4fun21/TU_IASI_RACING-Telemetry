@@ -1,6 +1,5 @@
 import { addFile, createCsv, createTable, getFiles } from "./api/endpoints";
 import "./App.css";
-import backgroundImage from "./assets/cool-background.png";
 import logo from "./assets/tuiasilogo.png";
 import { useNavigate } from "react-router-dom";
 
@@ -40,8 +39,8 @@ function Home() {
     return (
         <>
             <div
-                className="flex h-screen items-center justify-center bg-cover bg-center bg-no-repeat px-6 py-12"
-                style={{ backgroundImage: `url(${backgroundImage})` }}
+                className="flex h-screen items-center justify-center min-h-screen bg-gray-900 text-white p-8 flex flex-col items-center px-6 py-12"
+                
             >
                 <div className="w-full max-w-sm bg-gray-800/75 rounded-lg p-6 shadow-lg">
                     <img alt="Your Company" src={logo} className="mx-auto h-10 w-auto" />

@@ -1,5 +1,4 @@
 import {createSession} from "../../api/sessions.routs";
-import backgroundImage from "../../assets/cool-background.png";
 import logo from "../../assets/tuiasilogo.png";
 import { useNavigate } from "react-router-dom";
 import RaceTrackSelect from "./Components/RaceTrackSelect";
@@ -13,7 +12,7 @@ import { MqttService } from "../../services/MqttServices";
 function MqttAuth() {
     const navigate = useNavigate();
     // Default to a track that exists in your database.
-    const [raceTrack, setRaceTrack] = useState({ id: 1, name: "Bacau" });
+    const [raceTrack, setRaceTrack] = useState({ id: 2, name: "Bacau" });
 
     const handleConnect = async (e) => {
         e.preventDefault();
@@ -33,7 +32,7 @@ function MqttAuth() {
         const secs  = String(now.getSeconds()).padStart(2, '0');
         const timeStr = `${hours}-${mins}-${secs}`;
         // build filename
-        const csvFile = `${raceTrack.name}_${dateStr}_${timeStr}.csv`;
+        const csvFile = `${raceTrack.name}.csv`;
         const session_payload={
             csvFileName:csvFile,
             trackId:raceTrack.id,
@@ -60,10 +59,12 @@ function MqttAuth() {
             
             
             alert(`Connection successful! Session ${sessionResp.id} started. Saving to ${csvFile}`);
+            const sessionId=sessionResp.id;
+            
             // kick off the MQTT loop
             // await startTelemetry({ start: true });
             // // now navigate *and* carry sessionId along in location.state
-            // navigate("/live-dashboard", {state: { sessionId, trackId: raceTrack.id }  });
+            navigate("/live-dashboard", {state: { sessionId, trackId: raceTrack.id }  });
         } catch (err) {
             console.error("Failed to connect to telemetry backend", err?.response);
             // Provide user feedback on failure
@@ -79,8 +80,8 @@ function MqttAuth() {
 
     return (
         <div
-            className="flex h-screen items-center justify-center bg-cover bg-center bg-no-repeat px-6 py-12"
-            style={{ backgroundImage: `url(${backgroundImage})` }}
+            className="flex h-screen items-center justify-center min-h-screen bg-gray-900 text-white p-8 flex flex-col items-center px-6 py-12"
+
         >
             <div className="w-full max-w-sm bg-gray-800/75 rounded-lg p-6 shadow-lg">
                 <img alt="Your Company" src={logo} className="mx-auto h-10 w-auto" />
