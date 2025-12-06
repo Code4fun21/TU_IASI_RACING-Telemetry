@@ -9,38 +9,47 @@ import {
   ListboxOption
 } from "@headlessui/react";
 import { ChevronUpDownIcon, CheckIcon } from "@heroicons/react/20/solid";
-import { getMonoposts } from "../../../api/monoposts.routes"; // adjust path as needed
+import { api } from "../../../services/api";
 
 export default function MonopostSelect({ value, onChange }) {
   const [setups, setSetups] = useState([]);
 
   useEffect(() => {
-    getMonoposts()
-      .then((res) => setSetups(res.data))
+    api.getMonoposts()
+      .then((res) => setSetups(res))
       .catch(console.error);
   }, []);
 
   return (
     <Listbox value={value} onChange={onChange}>
-      <div className="relative">
-        <ListboxButton className="w-full text-left bg-white border px-3 py-1 rounded">
-          {value?.name || "Select a setup"}
-          <ChevronUpDownIcon className="w-5 h-5 inline float-right text-gray-500" />
-        </ListboxButton>
+      {/* 1. Button */}
+      <ListboxButton className="w-full text-left bg-white border px-3 py-1 rounded flex items-center justify-between">
+        <span className="block truncate">{value?.details || "Select a setup"}</span>
+        <ChevronUpDownIcon className="w-5 h-5 text-gray-500" aria-hidden="true" />
+      </ListboxButton>
 
-        <ListboxOptions className="absolute mt-1 w-full bg-white border rounded shadow max-h-60 overflow-auto z-10">
-          {setups.map((s) => (
-            <ListboxOption
-              key={s.id}
-              value={s}
-              className="cursor-pointer px-3 py-1 hover:bg-indigo-100 flex justify-between"
-            >
-              {s.name}
-              {value?.id === s.id && <CheckIcon className="w-4 h-4 text-indigo-600" />}
-            </ListboxOption>
-          ))}
-        </ListboxOptions>
-      </div>
+      
+      <ListboxOptions 
+        anchor="bottom" 
+        className="w-[var(--button-width)] bg-white border rounded shadow-lg max-h-60 overflow-auto z-[9999] mt-1 focus:outline-none"
+      >
+        {setups.map((d) => (
+          <ListboxOption
+            key={d.id}
+            value={d}
+            className="group cursor-pointer select-none px-3 py-2 data-[focus]:bg-indigo-100 data-[selected]:bg-indigo-50"
+          >
+            <div className="flex justify-between items-center">
+              <span className="block truncate font-normal group-data-[selected]:font-semibold">
+                {d.details}
+              </span>
+              {value?.id === d.id && (
+                <CheckIcon className="w-4 h-4 text-indigo-600" aria-hidden="true" />
+              )}
+            </div>
+          </ListboxOption>
+        ))}
+      </ListboxOptions>
     </Listbox>
   );
 }

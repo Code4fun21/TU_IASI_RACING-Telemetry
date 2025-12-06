@@ -1,46 +1,33 @@
 import { create } from 'zustand';
 
-// Define the structure of a single telemetry point (example)
-type TelemetryPoint = {
-  timestamp: number;
-  speed: number;
-  rpm: number;
-  throttle: number;
-  // Add other metrics as needed
-};
-
 interface MqttState {
   isConnected: boolean;
-  isRecording: boolean;
-  dataBuffer: TelemetryPoint[];
-  currentData: TelemetryPoint | null;
-  connectStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+  // 1. Raw Strings (for "Black Box" recording)
+  rawBuffer: string[];
+  // 2. Decoded Objects (for Charts)
+  decodedBuffer: any[];
+  // Latest Data (for Gauges)
+  currentData: any | null;
   
   // Actions
-  addPoint: (point: TelemetryPoint) => void;
+  addMessage: (raw: string, decoded: any) => void;
   clearBuffer: () => void;
-  setStatus: (status: MqttState['connectStatus']) => void;
-  setIsRecording: (recording: boolean) => void;
+  setStatus: (connected: boolean) => void;
 }
 
 export const useMqttStore = create<MqttState>((set) => ({
   isConnected: false,
-  isRecording: false,
-  dataBuffer: [],
+  rawBuffer: [],
+  decodedBuffer: [],
   currentData: null,
-  connectStatus: 'disconnected',
 
-  addPoint: (point) => set((state) => ({
-    dataBuffer: state.isRecording ? [...state.dataBuffer, point] : state.dataBuffer,
-    currentData: point, // Update the display data immediately
+  addMessage: (raw, decoded) => set((state) => ({
+    rawBuffer: [...state.rawBuffer, raw],
+    // Only add to decoded buffer if decoding was successful
+    decodedBuffer: decoded ? [...state.decodedBuffer, decoded] : state.decodedBuffer,
+    currentData: decoded || state.currentData,
   })),
 
-  clearBuffer: () => set({ dataBuffer: [] }),
-  
-  setStatus: (status) => set({ 
-    connectStatus: status, 
-    isConnected: status === 'connected' 
-  }),
-
-  setIsRecording: (recording) => set({ isRecording: recording }),
+  clearBuffer: () => set({ rawBuffer: [], decodedBuffer: [], currentData: null }),
+  setStatus: (connected) => set({ isConnected: connected }),
 }));

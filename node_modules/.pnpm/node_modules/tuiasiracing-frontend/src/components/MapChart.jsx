@@ -165,7 +165,7 @@ const MapChart = ({
           orient: "horizontal",
           // This centers the legend horizontally at the bottom
           left: "center",
-          bottom: 20,
+          bottom: 10,
           inRange: {
             color: ["#2c7bb6", "#1dfdec", "#00ff00", "#eaff00", "#d7191c"],
           },

@@ -143,11 +143,27 @@ app.post('/api/drivers', async (c) => {
   const body = await c.req.json();
   const result = DriverSchema.safeParse(body);
   if (!result.success) return c.json({ error: result.error }, 400);
-
+console.log(body,result)
   const driver = result.data;
   await c.env.DB.prepare(
     'INSERT INTO Driver (name, weight, other) VALUES (?, ?, ?)'
   ).bind(driver.name, driver.weight, driver.other).run();
+
+  return c.json({ success: true });
+});
+
+//PUT app/drivers/:id
+app.put('/api/drivers/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  
+  // Validate schema if needed (DriverSchema)
+  
+  await c.env.DB.prepare(`
+    UPDATE Driver 
+    SET name = ?, weight = ?, other = ?
+    WHERE id = ?
+  `).bind(body.name, body.weight, body.other, id).run();
 
   return c.json({ success: true });
 });
@@ -186,7 +202,6 @@ app.get('/api/tracks', async (c) => {
 });
 
 //GET /api/tracks/:id
-
 app.get('/api/tracks/:id', async (c)=>{
   const id=c.req.param('id');
   const {results}= await c.env.DB.prepare(
@@ -212,7 +227,7 @@ app.post('/api/monoposts', async (c) => {
   const body = await c.req.json();
   const result = MonopostSchema.safeParse(body);
   if (!result.success) return c.json({ error: result.error }, 400);
-
+  
   const monopost = result.data;
   await c.env.DB.prepare(
     'INSERT INTO Monopost (details, tires, other) VALUES (?, ?, ?)'
@@ -236,6 +251,20 @@ app.get('/api/monoposts/:id', async (c) =>{
   return c.json(results);
 });
 
+// PUT/api/monoposts/:id
+app.put('/api/monoposts/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+
+  await c.env.DB.prepare(`
+    UPDATE Monopost 
+    SET details = ?, tires = ?, other = ?
+    WHERE id = ?
+  `).bind(body.details, body.tires, body.other, id).run();
+
+  return c.json({ success: true });
+});
+
 //DELETE /api/monoposts/:id
 app.delete('/api/monoposts/:id', async (c)=>{
   const id=c.req.param('id');
@@ -253,7 +282,6 @@ app.post('/api/timestamps', async (c)=>{
   const result= TimestampSchema.safeParse(body);
   
   if(!result.success) return c.json({error: result.error},404);
-
   const timestamp=result.data;
   await c.env.DB.prepare(
     'INSERT INTO Timestamp (startTime, endTime, driverId, monopostId, sessionId) VALUES(?, ?, ?, ?, ?)'
@@ -264,7 +292,7 @@ app.post('/api/timestamps', async (c)=>{
     timestamp.monopostId,
     timestamp.sessionId
   ).run();
-
+return c.json({ success: true });
 });
 
 //GET /api/timestamps/filter

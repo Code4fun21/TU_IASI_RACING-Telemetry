@@ -15,7 +15,7 @@
 		"binding": "DB",
 		"database_name": "telemetry-db",
 		"database_id": "xxxx-xxxx-local-xxxx",
-		"preview_database_id": "DB_PREVIEW" 
+		
 		}
   	],
 "r2_buckets": [
@@ -23,7 +23,6 @@
       "binding": "BUCKET",
       "bucket_name": "telemetry-files",
       // CHANGE THIS LINE:
-      "preview_bucket_name": "telemetry-files-preview"
     }
   ]
 	

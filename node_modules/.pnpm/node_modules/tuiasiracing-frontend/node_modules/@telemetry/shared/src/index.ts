@@ -37,7 +37,7 @@ export const TimestampSchema = z.object({
   id: z.number().optional(),
   startTime: z.number(),
   endTime: z.number(),
-  driverId: z.number(),
+  driverId:z.number(),
   monopostId: z.number(),
   sessionId: z.number(),
 });

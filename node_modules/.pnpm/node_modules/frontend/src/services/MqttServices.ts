@@ -1,74 +1,47 @@
 import mqtt from 'mqtt';
 import { useMqttStore } from '../store/MqttStore';
-import { MqttAuth } from '@telemetry/shared';
+import { Decoder } from './CANDecoder';
 
 export const MqttService = {
   client: null as mqtt.MqttClient | null,
 
-  connect: (connectionParam:MqttAuth) => {
-    if (MqttService.client && MqttService.client.connected) {
-      console.warn("Client already connected.");
-      return;
-    }
+  connect: (config: any) => {
+    if (MqttService.client?.connected) return;
 
-    useMqttStore.getState().setStatus('connecting');
-    const BROKER_URL = `wss://${connectionParam.broker}:8884/mqtt`;
-    const TELEMETRY_TOPIC = connectionParam.topic;
-    
-    // Create the MQTT client using WebSocket protocol
-    MqttService.client = mqtt.connect(BROKER_URL);
+    console.log(`Connecting to ${config.broker}...`);
+    MqttService.client = mqtt.connect(config.broker);
 
     MqttService.client.on('connect', () => {
       console.log('MQTT Connected');
-      useMqttStore.getState().setStatus('connected');
-      
-      // Subscribe to the live telemetry topic
-      MqttService.client?.subscribe(TELEMETRY_TOPIC, (err) => {
-        if (err) {
-          console.error("Subscription error:", err);
-          useMqttStore.getState().setStatus('error');
-        } else {
-          console.log(`Subscribed to topic: ${TELEMETRY_TOPIC}`);
-        }
-      });
+      useMqttStore.getState().setStatus(true);
+      MqttService.client?.subscribe(config.topic);
     });
 
-    MqttService.client.on('message', (topic, message) => {
-    const messageStr = message.toString();
+    MqttService.client.on('message', (topic, payload) => {
+      if (topic === config.topic) {
+        const rawString = payload.toString(); // "1234,0x401,AABB"
+        
+        // 1. Decode It
+        const decodedObject = Decoder.parse(rawString);
 
-    if(topic===TELEMETRY_TOPIC){
-      try {
-          const parts = messageStr.split(',');
-          
-          if (parts.length >= 3) {
-              const payload = {
-                  timestamp: parseFloat(parts[0]),
-                  canId: parts[1],
-                  data: parts[2]
-              };
-
-              // Now send this 'payload' object to your state store or update function
-              // Example: useTelemetryStore.getState().updateData(payload);
-              console.log("Parsed Data:", payload); 
-          }
-      } catch (error) {
-          console.error("Error parsing manual payload:", error);
+        // 2. Store Both
+        useMqttStore.getState().addMessage(rawString, decodedObject);
       }
-  }
-});
-    MqttService.client.on('error', (error) => {
-      console.error('MQTT Connection Error:', error);
-      MqttService.client?.end();
-      useMqttStore.getState().setStatus('error');
+    });
+
+    MqttService.client.on('error', (err) => {
+      console.error("MQTT Error", err);
+      useMqttStore.getState().setStatus(false);
+    });
+    
+    MqttService.client.on('close', () => {
+        useMqttStore.getState().setStatus(false);
     });
   },
 
   disconnect: () => {
     if (MqttService.client) {
-      MqttService.client.end(() => {
-        useMqttStore.getState().setStatus('disconnected');
-        console.log('MQTT Disconnected');
-      });
+      MqttService.client.end();
     }
-  },
+  }
 };
