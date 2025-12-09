@@ -58,6 +58,7 @@ export default function UploadPage() {
 
       const sessionMeta = {
         csvFileName: storedFileName,
+        decodedFileName:`${storedFileName}-decoded.json`,
         trackId: Number(trackId),
         date: dateTime.date,
         time: dateTime.time,
@@ -134,18 +135,21 @@ export default function UploadPage() {
     try {
       const layoutJson = await readJsonFile(layoutFile);
       const gatesJson = await readJsonFile(gatesFile);
-
+      
       // Validate
       validateLayout(layoutJson);
       validateGates(gatesJson);
 
-      // --- FIX IS HERE ---
-      await api.saveTrack({
-        name: trackName,
-        gates: JSON.stringify(gatesJson),
-        coordinates: JSON.stringify(layoutJson) // Changed from 'trackCoordinates' to 'coordinates'
-      });
+      
+      const storedLayoutName = await api.uploadFile(layoutFile);
+      const storedGatesName = await api.uploadFile(gatesFile);
 
+
+      await api.saveTrack({
+          name: trackName,
+          gates: storedGatesName,       
+          coordinates: storedLayoutName 
+      });
       
 
       alert("✅ Track Saved Successfully!");

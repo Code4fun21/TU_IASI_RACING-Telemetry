@@ -1,14 +1,13 @@
 import { useEffect, useState, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useMqttStore } from "../../store/MqttStore";
-import { MqttService } from "../../services/MqttServices";
+import { MqttService } from "../../../src/services/MqttServices"; // Ensure filename matches (Singular)
 import { api } from "../../services/api";
 import Papa from "papaparse";
-
+import { transformToColumnar } from "../../services/DataTransformer";
 // Components
-// import ChartWrapper from "../../components/ChartWrapper"; 
-import MapChart from "../../components/MapChart";
-import TopActionBar from "./Components/TopActionBar";
+import MapChart from "../../components/MapChart"; 
+import TopActionBar from "./Components/TopActionBar"; 
 import MultiLineChart from "../../components/MultiLineChart"; 
 import RPMChart from "../../components/RPMChart";
 import SpeedChart from "../../components/SpeedChart";
@@ -27,8 +26,11 @@ export default function LiveDashboard() {
 
   // 2. MQTT Store Data
   const isConnected = useMqttStore((state) => state.isConnected);
-  const currentData = useMqttStore((state) => state.currentData) || {}; // Default to empty object to prevent crashes
-  const dataBuffer = useMqttStore((state) => state.dataBuffer);
+  const currentData = useMqttStore((state) => state.currentData) || {}; 
+  
+  // FIX 1: Read 'decodedBuffer' instead of 'dataBuffer'
+  const decodedBuffer = useMqttStore((state) => state.decodedBuffer); 
+  
   const clearBuffer = useMqttStore((state) => state.clearBuffer);
 
   // 3. Local State
@@ -36,72 +38,89 @@ export default function LiveDashboard() {
   const [trackData, setTrackData] = useState(null);
   const [gates, setGates] = useState([]);
 
-  // --- SAFETY CHECK: Redirect if missing session ---
-  useEffect(() => {
-    if (!sessionId || !trackId) {
-      console.warn("Missing session/track ID. Redirecting to start...");
-      // navigate("/mqtt-auth"); // Uncomment this when you are ready to enforce flow
-    }
-  }, [sessionId, trackId, navigate]);
+  const [sessionData,setSession]=useState(null)
 
-  // --- FETCH TRACK DATA ---
-  useEffect(() => {
+  const readBlobAsText = (blob) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsText(blob);
+    });
+  };
+
+  // --- SAFETY CHECK ---
+ useEffect(() => {
     if (!trackId) return;
 
-    api.getTrackById(trackId)
-      .then((track) => {
-        try {
-          // Parse Gates
-          let parsedGates = [];
-          if (typeof track.gates === 'string') {
-            parsedGates = JSON.parse(track.gates);
-          } else if (Array.isArray(track.gates)) {
-            parsedGates = track.gates;
-          }
-          setGates(parsedGates);
+    const loadTrackAssets = async () => {
+      try {
+        const track = await api.getTrackById(trackId);
+        
+        // 1. Fetch Blobs
+        const [gatesBlob, layoutBlob] = await Promise.all([
+            api.downloadFile(track.gates),       
+            api.downloadFile(track.coordinates)  
+        ]);
 
-          // Parse Layout
-          let parsedLayout = null;
-          if (typeof track.coordinates === 'string') {
-             parsedLayout = JSON.parse(track.coordinates);
-          } else {
-             parsedLayout = track.coordinates;
-          }
-          
-          setTrackData({ ...track, coordinates: parsedLayout });
+        // 2. Convert Blobs to Text Strings
+        const gatesText = await readBlobAsText(gatesBlob);
+        const layoutText = await readBlobAsText(layoutBlob);
 
-        } catch (e) {
-          console.error("Error parsing Track JSON:", e);
-        }
-      })
-      .catch((err) => console.error("Failed to load track:", err));
+        // 3. Parse JSON
+        const parsedGates = JSON.parse(gatesText);
+        const parsedLayout = JSON.parse(layoutText);
+
+        // 4. Set State
+        setGates(parsedGates);
+        setTrackData({ ...track, coordinates: parsedLayout });
+
+      } catch (err) {
+        console.error("Failed to load/parse track assets:", err);
+      }
+    };
+
+    loadTrackAssets();
   }, [trackId]);
 
+  useEffect(()=>{
+    const loadSessionData= async()=>{
+      try{
+        const session=  await api.getSessionById(sessionId);
+        setSession(session)
+      }
+      catch (err) {
+        console.error("Failed to load session data:", err);
+      }
+    }
+    loadSessionData();
+  },[sessionId])
+
+  
+
   // --- PREPARE DATA FOR CHARTS ---
-  // Convert the Zustand buffer into the format your MultiLineCharts expect
+  // FIX 2: Use 'decodedBuffer' for all calculations
   const lineDataEngine = useMemo(() => {
-    const timestamps = dataBuffer.map(d => new Date(d.timestamp).toLocaleTimeString());
+    const timestamps = decodedBuffer.map(d => new Date(d.timestamp).toLocaleTimeString());
     const result = { timestamps };
-    
     ENGINE_SIGNALS.forEach(key => {
-        result[key] = dataBuffer.map(d => d[key] ?? 0);
+        result[key] = decodedBuffer.map(d => d[key] ?? 0);
     });
     return result;
-  }, [dataBuffer]);
+  }, [decodedBuffer]);
 
   const lineDataVital = useMemo(() => {
-    const timestamps = dataBuffer.map(d => new Date(d.timestamp).toLocaleTimeString());
+    const timestamps = decodedBuffer.map(d => new Date(d.timestamp).toLocaleTimeString());
     const result = { timestamps };
-    
     VITAL_SIGNALS.forEach(key => {
-        result[key] = dataBuffer.map(d => d[key] ?? 0);
+        result[key] = decodedBuffer.map(d => d[key] ?? 0);
     });
     return result;
-  }, [dataBuffer]);
+  }, [decodedBuffer]);
 
   // Prepare Map Data
   const mapData = useMemo(() => {
-    return dataBuffer
+    return decodedBuffer
       .filter(p => p.GPS_Longitude && p.GPS_Latitude)
       .map(p => ({
          lon: p.GPS_Longitude,
@@ -109,7 +128,7 @@ export default function LiveDashboard() {
          speed: p.GPS_Speed,
          ts: p.timestamp
       }));
-  }, [dataBuffer]);
+  }, [decodedBuffer]);
 
 
   // --- STOP & SAVE ---
@@ -119,12 +138,35 @@ export default function LiveDashboard() {
         try {
             MqttService.disconnect();
             
-            const csv = Papa.unparse(dataBuffer);
-            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-            const fileName = `Session_${sessionId}_${Date.now()}.csv`;
-            const file = new File([blob], fileName, { type: "text/csv" });
+            const timestamp = Date.now();
 
-            await api.uploadFile(file);
+            // FIX 3: Get RAW buffer directly from store state for saving
+            const rawBuffer = useMqttStore.getState().rawBuffer;
+            const currentDecoded = useMqttStore.getState().decodedBuffer;
+
+            // 1. Prepare RAW File (.csv)
+            // Join array of strings with newlines
+            const rawCsvContent = "timestamp,id,payload\n" + rawBuffer.join("\n");
+            const rawBlob = new Blob([rawCsvContent], { type: "text/csv" });
+            const rawFileName = sessionData.csvFileName;
+            const rawFile = new File([rawBlob], rawFileName);
+
+            // 2. Prepare DECODED File (.json)
+            const columnarData = transformToColumnar(useMqttStore.getState().decodedBuffer);
+            const decodedJsonContent = JSON.stringify(columnarData);
+            const decodedBlob = new Blob([decodedJsonContent], { type: "application/json" });
+            const decodedFileName = sessionData.decodedFileName;
+            const decodedFile = new File([decodedBlob], decodedFileName);
+
+            // 3. Upload Both
+            await api.uploadFile(rawFile);
+            await api.uploadFile(decodedFile);
+
+            // Note: If you need to update the session in the DB with these new filenames,
+            // you would call an update API here. For now, we just upload them.
+            console.log("Saved Raw:", rawFileName);
+            console.log("Saved Decoded:", decodedFileName);
+
             alert("Session Saved Successfully!");
             clearBuffer();
             navigate("/");
@@ -138,12 +180,12 @@ export default function LiveDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-800/75"> {/* Light bg to match your components */}
+    <div className="min-h-screen bg-gray-100 pb-10"> 
       <div className="flex justify-center w-full">
         <TopActionBar sessionId={sessionId} />
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
+      <div className="w-full px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
         
         {/* Connection Status Banner */}
         <div className={`p-4 rounded-lg shadow-sm border-l-4 ${isConnected ? "bg-green-50 border-green-500" : "bg-red-50 border-red-500"}`}>
@@ -162,36 +204,34 @@ export default function LiveDashboard() {
         </div>
 
         {/* 1. Charts Row */}
-        <div className="bg-gray-100/65 p-6 rounded-lg shadow">
+        <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Engine Signals</h3>
-            {/* Guard against empty data */}
-            {dataBuffer.length > 0 ? (
+            {decodedBuffer.length > 0 ? (
                 <MultiLineChart data={lineDataEngine} />
             ) : (
-                <p className="text-center text-black-400 py-10">Waiting for data...</p>
+                <p className="text-center text-gray-400 py-10">Waiting for data...</p>
             )}
         </div>
 
-        <div className="bg-gray-100/65 p-6 rounded-lg shadow">
+        <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Telemetry Analysis</h3>
-            {dataBuffer.length > 0 ? (
+            {decodedBuffer.length > 0 ? (
                 <MultiLineChart data={lineDataVital} />
             ) : (
-                <p className="text-center text-gray-900 py-10">Waiting for data...</p>
+                <p className="text-center text-gray-400 py-10">Waiting for data...</p>
             )}
         </div>
 
         {/* 2. Map Row */}
-        <div className="bg-gray-100/65 p-6 rounded-lg shadow h-[600px] relative">
+        <div className="bg-white p-6 rounded-lg shadow h-[600px] relative">
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Map</h3>
-            {/* THE FIX IS HERE: We check if trackData exists before rendering */}
             {trackData ? (
                 <MapChart 
                     geoData={trackData.coordinates} 
                     data={mapData} 
                     gates={gates}  
                     height={500} 
-                    rotation={90} 
+                    rotation={-90} 
                 />
             ) : (
                 <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">
@@ -202,13 +242,13 @@ export default function LiveDashboard() {
 
         {/* 3. Gauges Row */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="bg-gray-100/65 p-4 shadow rounded-lg flex justify-center">
+            <div className="bg-white p-4 shadow rounded-lg flex justify-center">
                 <RPMChart data={currentData.rpm || 0} height={300} width={300} />
             </div>
-            <div className="bg-gray-100/65 p-4 shadow rounded-lg flex justify-center">
+            <div className="bg-white p-4 shadow rounded-lg flex justify-center">
                 <SpeedChart data={currentData.GPS_Speed || 0} height={300} width={300} />
             </div>
-            <div className="bg-gray-100/65 p-4 shadow rounded-lg flex flex-col items-center justify-center">
+            <div className="bg-white p-4 shadow rounded-lg flex flex-col items-center justify-center">
                 <h4 className="text-sm font-medium text-gray-500 mb-2">Brake Pressure</h4>
                 <BrakePressureChart data={currentData.brakePressure || 0} height={200} width={300} />
             </div>

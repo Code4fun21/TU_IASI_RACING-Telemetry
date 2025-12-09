@@ -1,10 +1,10 @@
 import { addFile, createCsv, createTable, getFileData, getFiles, getTable, } from "../api/endpoints";
-import{getTrackById} from "../api/tracks.routes";
 import backgroundImage from "../assets/cool-background.png";
 import logo from "../assets/tuiasilogo.png";
 import { useLocation, useNavigate } from "react-router-dom";
 import { FolderIcon } from "@heroicons/react/20/solid";
 import { useEffect, useState } from "react";
+import { api } from "../services/api";
 
 function OfflineFiles() {
     const sessions = useLocation().state.files;
@@ -12,16 +12,18 @@ function OfflineFiles() {
     const navigate = useNavigate();
 
     useEffect(() => {
+        console.log(sessions)
         const fetchTrackData = async () => {
             const result = await Promise.all(
                 sessions.map(async (session) => {
-                    const res = await getTrackById(session.trackId);
+                    const res = await api.getTrackById(session.trackId);
                     return {
                         ...session,
-                        trackData: res.data,
+                        trackData: res,
                     };
                 })
             );
+            console.log(result)
             setSessionWithTracks(result);
         };
 

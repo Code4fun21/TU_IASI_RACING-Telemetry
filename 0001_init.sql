@@ -28,7 +28,8 @@ CREATE TABLE Monopost (
 -- 4. Sessions
 CREATE TABLE Session (                                   
       id INTEGER PRIMARY KEY AUTOINCREMENT,                
-      csvFileName TEXT NOT NULL,                           
+      csvFileName TEXT NOT NULL,           
+      decodedFileName TEXT NOT NULL,                           
       trackId INTEGER,                                     
       date TEXT,                                           
       time TEXT,                                           

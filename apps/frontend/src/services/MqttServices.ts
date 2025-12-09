@@ -5,43 +5,86 @@ import { Decoder } from './CANDecoder';
 export const MqttService = {
   client: null as mqtt.MqttClient | null,
 
-  connect: (config: any) => {
-    if (MqttService.client?.connected) return;
-
-    console.log(`Connecting to ${config.broker}...`);
-    MqttService.client = mqtt.connect(config.broker);
-
-    MqttService.client.on('connect', () => {
-      console.log('MQTT Connected');
-      useMqttStore.getState().setStatus(true);
-      MqttService.client?.subscribe(config.topic);
-    });
-
-    MqttService.client.on('message', (topic, payload) => {
-      if (topic === config.topic) {
-        const rawString = payload.toString(); // "1234,0x401,AABB"
-        
-        // 1. Decode It
-        const decodedObject = Decoder.parse(rawString);
-
-        // 2. Store Both
-        useMqttStore.getState().addMessage(rawString, decodedObject);
-      }
-    });
-
-    MqttService.client.on('error', (err) => {
-      console.error("MQTT Error", err);
-      useMqttStore.getState().setStatus(false);
-    });
+  connect: (config: { broker: string; port: number; topic: string }) => {
     
-    MqttService.client.on('close', () => {
-        useMqttStore.getState().setStatus(false);
-    });
+    if (MqttService.client?.connected) {
+        console.warn("MQTT Client already connected.");
+        return;
+    }
+
+    // 1. Construct WebSocket URL
+    let brokerUrl = config.broker;
+    if (!brokerUrl.startsWith('ws://') && !brokerUrl.startsWith('wss://')) {
+        const protocol = (config.port === 8884 || config.port === 443) ? 'wss' : 'ws';
+        brokerUrl = `${protocol}://${brokerUrl}`;
+    }
+
+    const urlHasPort = /:\d+/.test(brokerUrl);
+    if (!urlHasPort) {
+        brokerUrl = `${brokerUrl}:${config.port}`;
+    }
+
+    if (!brokerUrl.includes('/mqtt') && brokerUrl.includes('hivemq')) {
+        brokerUrl = `${brokerUrl}/mqtt`;
+    }
+
+    console.log(`Attempting connection to: ${brokerUrl}`);
+    useMqttStore.getState().setStatus(false);
+
+    // 2. Connect
+    try {
+        MqttService.client = mqtt.connect(brokerUrl, {
+            reconnectPeriod: 2000,
+            clean: true,
+            // FIX: Use slice(2, 10) instead of substr(2, 8)
+            clientId: 'telemetry_client_' + Math.random().toString(16).slice(2, 10),
+            path: '/mqtt', 
+        });
+
+        // 3. Event Handlers
+        MqttService.client.on('connect', () => {
+            console.log('MQTT Connected');
+            useMqttStore.getState().setStatus(true);
+            
+            MqttService.client?.subscribe(config.topic, (err) => {
+                if (err) console.error("Subscription error:", err);
+                else console.log(`Subscribed to: ${config.topic}`);
+            });
+        });
+
+        MqttService.client.on('message', (topic, payload) => {
+            if (topic === config.topic) {
+                try {
+                    const rawString = payload.toString(); 
+                    const decodedObject = Decoder.parse(rawString);
+                    useMqttStore.getState().addMessage(rawString, decodedObject);
+                } catch (e) {
+                    console.error("Msg Error:", e);
+                }
+            }
+        });
+
+        MqttService.client.on('error', (err) => {
+            console.error("MQTT Error:", err);
+            useMqttStore.getState().setStatus(false);
+        });
+        
+        MqttService.client.on('offline', () => {
+            console.warn("MQTT Offline");
+            useMqttStore.getState().setStatus(false);
+        });
+
+    } catch (error) {
+        console.error("Connection failed instantly:", error);
+    }
   },
 
   disconnect: () => {
     if (MqttService.client) {
+      console.log("Disconnecting MQTT...");
       MqttService.client.end();
+      MqttService.client = null;
+      useMqttStore.getState().setStatus(false);
     }
   }
 };

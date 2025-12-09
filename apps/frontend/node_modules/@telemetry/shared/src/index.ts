@@ -27,7 +27,8 @@ export const MonopostSchema = z.object({
 // --- 4. SESSION SCHEMA (The most important one) ---
 export const SessionSchema = z.object({
   id: z.number().optional(),
-  csvFileName: z.string(), // The link to R2
+  csvFileName: z.string(), 
+  decodedFileName:z.string(),
   trackId: z.number(),
   date: z.string(),
   time: z.string(),

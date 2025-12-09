@@ -101,7 +101,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
   "0074": [
     { name: "GPS_Latitude",  offset: 0, size: 3, method: "Method2" },    // Row 29
     { name: "GPS_Longitude", offset: 3, size: 3, method: "Method2" },    // Row 30
-    { name: "GPS_Speed",     offset: 6, size: 1, method: "DecimalGPS" }  // Row 31
+    { name: "GPS_Speed",     offset: 6, size: 1, method: "Method2" }  // Row 31
   ],
 
   // ID 112 (0x0070) - Dampers
@@ -172,7 +172,9 @@ function hexToDataView(hex: string): DataView {
   
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+    // OLD: parseInt(hex.substr(i * 2, 2), 16);
+    // NEW: Use slice(start, end)
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
   return new DataView(bytes.buffer);
 }

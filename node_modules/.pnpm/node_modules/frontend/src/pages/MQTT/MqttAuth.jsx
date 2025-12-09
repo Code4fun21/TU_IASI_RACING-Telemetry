@@ -1,9 +1,8 @@
 import {createSession} from "../../api/sessions.routs";
+import { useEffect, useState, useMemo } from "react";
 import logo from "../../assets/tuiasilogo.png";
 import { useNavigate } from "react-router-dom";
 import RaceTrackSelect from "./Components/RaceTrackSelect";
-import { useState } from "react";
-// import { connectToTelemetry,startTelemetry } from "../../api/endpoints";
 import { api } from "../../services/api";
 import { MqttService } from "../../services/MqttServices";
 
@@ -12,10 +11,32 @@ import { MqttService } from "../../services/MqttServices";
 function MqttAuth() {
     const navigate = useNavigate();
     // Default to a track that exists in your database.
-    const [raceTrack, setRaceTrack] = useState({ id: 2, name: "Bacau" });
+     const [raceTrack, setRaceTrack] = useState(null); 
+
+    // 2. Fetch real tracks on load
+    useEffect(() => {
+        api.getTracks().then((tracks) => {
+            if (tracks && tracks.length > 0) {
+                // Automatically pick the first track found in the DB
+                setRaceTrack(tracks[0]); 
+                console.log("Defaulting to track:", tracks[0]);
+            } else {
+                console.warn("No tracks found in DB. Please add one first.");
+            }
+        }).catch(err => console.error("Failed to load tracks", err));
+    }, []);
 
     const handleConnect = async (e) => {
         e.preventDefault();
+        
+        // 3. Prevent starting if no track is valid
+        if (!raceTrack) {
+            alert("No Track selected! Please go to 'Add Data File' -> 'Add Track' to create one first.");
+            return;
+        }
+
+
+   
         const form = e.currentTarget;
         const formData = new FormData(form);
 
@@ -32,15 +53,16 @@ function MqttAuth() {
         const secs  = String(now.getSeconds()).padStart(2, '0');
         const timeStr = `${hours}-${mins}-${secs}`;
         // build filename
-        const csvFile = `${raceTrack.name}.csv`;
+        const rootName = `${raceTrack.name}_${timeStr}`;
         const session_payload={
-            csvFileName:csvFile,
+            csvFileName:`${rootName}.csv`,
+            decodedFileName:`${rootName}_decoded.csv`,
             trackId:raceTrack.id,
             date:dateStr,
             time:timeStr
         }
         const mqtt_log_payload = {
-            trackId: raceTrack.id,
+            // trackId: raceTrack.id,
             broker: formData.get("Broker"),
             port: Number(formData.get("Port")),
             topic: formData.get("topic"),
@@ -48,17 +70,13 @@ function MqttAuth() {
         };
         console.log("Connecting with payload:", mqtt_log_payload);
         try {
-            //old
-            // const resp = await connectToTelemetry(mqtt_log_payload);
-            //new
-            MqttService.connect(mqtt_log_payload);
-            // console.log("Backend response:", resp.data);
-            
+           
+            MqttService.connect(mqtt_log_payload);            
             
             const sessionResp = await api.saveSession(session_payload);
             
             
-            alert(`Connection successful! Session ${sessionResp.id} started. Saving to ${csvFile}`);
+            alert(`Connection successful! Session ${sessionResp.id} started. Saving to ${session_payload.csvFileName}`);
             const sessionId=sessionResp.id;
             
             // kick off the MQTT loop
@@ -113,7 +131,7 @@ function MqttAuth() {
                             id="Port"
                             name="Port"
                             type="number"
-                            defaultValue={1883}
+                            defaultValue={8884}
                             required
                             className="mt-1 block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 outline-1 outline-gray-300 focus:outline-2 focus:outline-indigo-600"
                         />

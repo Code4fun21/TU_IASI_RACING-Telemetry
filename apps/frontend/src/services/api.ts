@@ -1,18 +1,11 @@
 import axios from 'axios';
 import type { Session, Driver, Track, Monopost, MqttAuth, Timestamp } from '@telemetry/shared';
-import { getTrackById } from '../api/tracks.routes';
-import { deleteMonopost, getMonopostById } from '../api/monoposts.routes';
 
 const API_URL = import.meta.env.VITE_API_URL;
 
 export const api = {
 
-connectToTelemetry: async (payload:MqttAuth) => {
-    const response = await axios.get(`${API_URL}/connectToMqtt`, {
-      params: payload
-    });
-    return response.data; // Returns a Blob (file-like object)
-  },
+
 
   // --- FILE ---
   uploadFile: async (file: File) => {
@@ -50,6 +43,10 @@ connectToTelemetry: async (payload:MqttAuth) => {
     const response = await axios.get<Session[]>(`${API_URL}/sessions`);
     return response.data;
   },
+   getSessionById: async(sessionId: number)=>{
+    const response = await axios.get<Session>(`${API_URL}/sessions/${sessionId}`,);
+    return response.data;
+  },
 
 
 // --- TRACKS ---
@@ -57,7 +54,11 @@ connectToTelemetry: async (payload:MqttAuth) => {
     const response = await axios.get<Track>(`${API_URL}/tracks/${trackId}`,);
     return response.data;
   },
-  saveTrack: async (trackData: { name: string; gates: string; coordinates: string }) => {
+  getTracks: async () => {
+    const response = await axios.get<Track[]>(`${API_URL}/tracks`);
+    return response.data;
+  },
+  saveTrack: async (trackData: Track) => {
     const response = await axios.post(`${API_URL}/tracks`, trackData);
     return response.data;
   },

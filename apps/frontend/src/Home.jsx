@@ -2,6 +2,7 @@ import { addFile, createCsv, createTable, getFiles } from "./api/endpoints";
 import "./App.css";
 import logo from "./assets/tuiasilogo.png";
 import { useNavigate } from "react-router-dom";
+import { api } from "./services/api";
 
 function Home() {
     let navigate = useNavigate();
@@ -17,9 +18,9 @@ function Home() {
         // await addFile().then((response) => {
         //     console.log("Add file", response);
         // });
-        const sessions = await getFiles().then((response) => {
-            console.log("Create table", response?.data);
-            return response?.data;
+        const sessions = await api.getSessions().then((response) => {
+            console.log("Create table", response);
+            return response;
         });
 
         navigate("/offline-files", { state: { files: sessions } });

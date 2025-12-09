@@ -72,6 +72,7 @@ app.get('/api/sessions/:id', async (c) => {
 app.post('/api/sessions', async (c) => {
   const body = await c.req.json();
   const result = SessionSchema.safeParse(body);
+  console.log(body,result)
   if (!result.success) {
     return c.json({ error: result.error }, 400);
   }
@@ -80,42 +81,38 @@ app.post('/api/sessions', async (c) => {
 
   
   const info = await c.env.DB.prepare(`
-    INSERT INTO Session (csvFileName, trackId, date, time)
-    VALUES (?, ?, ?, ?)`
-  ).bind(
-    session.csvFileName,
-    session.trackId,
-    session.date,
-    session.time
-  ).run();
+            INSERT INTO Session (csvFileName, decodedFileName, trackId, date, time)
+            VALUES (?, ?, ?, ?, ?)
+        `).bind(
+            session.csvFileName,
+            session.decodedFileName, 
+            session.trackId,
+            session.date,
+            session.time
+        ).run();
 
   return c.json({ success: true, id: info.meta.last_row_id });
 });
 
 // DELETE /api/sessions/:id - ❌ NEW
-app.delete('/api/sessions/:id', async (c) => {
+app.delete('/api/tracks/:id', async (c) => {
   const id = c.req.param('id');
-  const sessionResult = await c.env.DB.prepare(
-    'SELECT csvFileName FROM Session WHERE id = ?'
-  ).bind(id).first<{ csvFileName: string }>();
-  if (!sessionResult || !sessionResult.csvFileName) {
-    await c.env.DB.prepare('DELETE FROM Session WHERE id = ?').bind(id).run();
-    return c.json({ success: true, message: 'Metadata deleted, file not found or already gone.' });
-  }
-
-  const fileName = sessionResult.csvFileName;
-
-  await c.env.DB.prepare('DELETE FROM Session WHERE id = ?').bind(id).run();
-
+  
   try {
+    await c.env.DB.prepare('DELETE FROM Track WHERE id=?').bind(id).run();
+    return c.json({ success: true });
+
+  } catch (e: any) {
+    // Catch Foreign Key Constraint Error
+    if (e.message.includes('FOREIGN KEY') || e.message.includes('SQLITE_CONSTRAINT')) {
+      return c.json({ 
+        error: "Cannot delete this Track because it is used in recorded Sessions. Please delete the Sessions first." 
+      }, 409); // 409 Conflict
+    }
     
-    await c.env.BUCKET.delete(fileName);
-    return c.json({ success: true, message: 'Session and file deleted.' });
-
-  } catch (error) {
-
-    console.error(`Failed to delete R2 file ${fileName}:`, error);
-    return c.json({ success: true, message: 'Metadata deleted, R2 deletion failed.' }, 500);
+    // Other errors
+    console.error(e);
+    return c.json({ error: "Internal Server Error" }, 500);
   }
 });
 
