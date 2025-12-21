@@ -27,6 +27,12 @@ export const api = {
     });
     return response.data; // Returns a Blob (file-like object)
   },
+    fetchJsonFile: async (fileName: string) => {
+    const response = await axios.get(`${API_URL}/download/${fileName}`, {
+      responseType: 'json', // Axios automatically parses the JSON
+    });
+    return response.data;
+  },
 
 
   // --- SESSIONS ---
@@ -69,6 +75,16 @@ export const api = {
     const response = await axios.post(`${API_URL}/timestamps`, timestampData);
     return response.data;
   },
+  getTimestamps: async (column: string, value: string | number) => {
+    const response = await axios.get(`${API_URL}/timestamps/filters`, {
+      // Axios automatically serializes these into ?column=...&value=...
+      params: {
+        column: column,
+        value: value
+      }
+    });
+    return response.data;
+  },
 
 
 // --- MONOSPOSTS ---
@@ -96,6 +112,10 @@ export const api = {
   },
   getDrivers: async()=>{
     const response = await axios.get<Driver[]>(`${API_URL}/drivers`,);
+    return response.data;
+  },
+  getDriverById: async(driverId: number)=>{
+    const response = await axios.get<Driver>(`${API_URL}/drivers/${driverId}`,);
     return response.data;
   },
 };

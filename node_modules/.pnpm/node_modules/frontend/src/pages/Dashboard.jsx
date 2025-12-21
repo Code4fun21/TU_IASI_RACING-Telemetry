@@ -2,9 +2,9 @@
 import { useContext, useEffect, useState, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { DriverContext } from "../context/DriverContext";
-import { getDriverById } from "../api/drivers.routes";
 import { getTrackById } from "../api/tracks.routes";
 import { alignToSharedTime } from "../components/alignSeries";
+import { api } from "../services/api";
 
 import LapTimesPanel from"../pages/MQTT/MoreCharts/Charts/LapTimesPanel";
 import TimestampSelect from "./MQTT/Components/TimestampSelect";
@@ -16,22 +16,10 @@ import AutoPairChart from "../pages/MQTT/MoreCharts/Charts/AutoPairChart";
 
 
 
-async function loadJsonFromTrackPath(rawPath, label = "Track") {
-  if (!rawPath) throw new Error(`${label}: empty path`);
-  
-  const base = rawPath.split("/").pop();
 
-  const modules = import.meta.glob("../components/tracks_data/**/*.json", { import: "default" });
-
-  const key = Object.keys(modules).find(k => k.endsWith(`/${base}`));
-  
-  if (!key) throw new Error(`${label}: not found in src/components/tracks_data (${base})`);
-  
-  return modules[key]();
-}
 
 export default function Dashboard() {
-  const { driverData, setDriverData } = useContext(DriverContext);
+const { driverData, setDriverData } = useContext(DriverContext);
   const { state } = useLocation();
   const { fileData = {}, session } = state || {};
 
@@ -41,30 +29,50 @@ export default function Dashboard() {
   const [geoData, setGeoData] = useState(null);
   const [gatesData, setGatesData] = useState([]);
 
+  // Helper to read blobs
+  const readBlobAsText = (blob) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsText(blob);
+      });
+  };
+
   // Load driver details for the selected timestamp
   useEffect(() => {
     if (!selectedTs?.driverId) return;
-    getDriverById(selectedTs.driverId)
+    api.getDriverById(selectedTs.driverId)
       .then((res) => setDriverData(res.data))
       .catch(console.error);
   }, [selectedTs, setDriverData]);
 
-  // Load track + gates JSON (works whether files are in public/tracks or src/components/tracks_data)
+  // Load track + gates JSON
   useEffect(() => {
     if (!session?.trackId) return;
 
     const fetchTrackFiles = async () => {
       try {
-        const res = await getTrackById(session.trackId);
-        const trackData = res.data; // { trackFile: "...", gates: "..." }
-
-        const [geoJson, gatesJson] = await Promise.all([
-          loadJsonFromTrackPath(trackData.trackFile, "Geo"),
-          loadJsonFromTrackPath(trackData.gates, "Gates"),
+        const track = await api.getTrackById(session.trackId);
+        
+        // 1. Fetch Blobs
+        const [gatesBlob, layoutBlob] = await Promise.all([
+            api.downloadFile(track.gates),       
+            api.downloadFile(track.coordinates)  
         ]);
-        // console.log(geoJson,gatesJson)
-        setGeoData(geoJson);
-        setGatesData(Array.isArray(gatesJson) ? gatesJson : (gatesJson.gates || gatesJson));
+
+        // 2. Convert Blobs to Text Strings
+        const gatesText = await readBlobAsText(gatesBlob);
+        const layoutText = await readBlobAsText(layoutBlob);
+
+        // 3. Parse JSON
+        const parsedGates = JSON.parse(gatesText);
+        const parsedLayout = JSON.parse(layoutText);
+
+        // --- Corrected assignment ---
+        setGeoData(parsedLayout);  // Layout goes to geoData
+        setGatesData(parsedGates); // Gates array goes to gatesData
+
       } catch (err) {
         console.error("Error loading track/gates:", err);
         setGeoData(null);
@@ -77,63 +85,92 @@ export default function Dashboard() {
 
   
 
-  // ---------- Prepare telemetry series ----------
+  // ---------- Prepare telemetry series (THE FIX) ----------
   const allSeries = useMemo(() => {
-    const out = {
-      GPS_Latitude: Array.isArray(fileData.GPS_Latitude) ? fileData.GPS_Latitude : [],
-      GPS_Longitude: Array.isArray(fileData.GPS_Longitude) ? fileData.GPS_Longitude : [],
-      GPS_Speed: Array.isArray(fileData.GPS_Speed) ? fileData.GPS_Speed : [],
+    // 1. Safety Check: If fileData is missing or empty, return empty structure
+    if (!fileData || !Array.isArray(fileData)) return {};
+
+    // 2. Map of "Chart Key" -> "Decoder Key"
+    // The keys on the Left are what your charts use.
+    // The keys on the Right are what your CANDecoder produces.
+    const keyMap = {
+        "ECU_time": "timestamp",
+        "RPM": "rpm",
+        "Manifold_air_pressure": "manifoldAirPressure",
+        "Manifold_air_temperature": "manifoldAirTemp",
+        "Coolant_temperature": "coolantTemp",
+        "Main_pulsewidth_bank1": "mainPulseWidth1", // Ensure decoder produces this if needed
+        "Main_pulsewidth_bank2": "mainPulseWidth2",
+        "Throttle_position": "throttlePosition",
+        "Battery_voltage": "batteryVoltage",
+        "Air_density_correction": "airDensityCorrection",
+        "Warmup_correction": "warmupCorrection",
+        "TPS_based_acceleration": "tpsBasedAcceleration",
+        "TPS_based_fuel_cut": "tpsBasedFuelCut",
+        "Total_fuel_correction": "totalFuelCorrection",
+        "VE_value_table_bank1": "veBank1",
+        "VE_value_table_bank2": "veBank2",
+        "Cold_advance": "coldAdvance",
+        "Rate_of_change_of_TPS": "tpsRateChange",
+        "Rate_of_change_of_RPM": "rpmRateChange",
+        "Sync_loss_counter": "syncLossCounter",
+        "Sync_loss_reason_code": "syncLossReason",
+        "Average_fuel_flow": "fuelFlow",
+        "Damper_Left_Rear": "damperLR",
+        "Damper_Right_Rear": "damperRR",
+        "Gear": "gear",
+        "Brake_Pressure": "brakePressure",
+        "BSPD": "bspd",
+        "Damper_Left_Front": "damperLF",
+        "Damper_Right_Front": "damperRF",
+        "Steering_Angle": "steering",
+        "Acceleration_on_X_axis": "accelerationX",
+        "Acceleration_on_Y_axis": "accelerationY",
+        "Acceleration_on_Z_axis": "accelerationZ",
+        "Gyroscope_on_X_axis": "gyroX",
+        "Gyroscope_on_Y_axis": "gyroY",
+        "Gyroscope_on_Z_axis": "gyroZ",
+        "GPS_Latitude": "GPS_Latitude",
+        "GPS_Longitude": "GPS_Longitude",
+        "GPS_Speed": "GPS_Speed"
     };
-    const zipECU = (obj = {}) =>
-      Object.entries(obj).map(([ts, val]) => [Number(ts), val == null ? null : Number(val)]);
 
-    out.ECU_time                 = zipECU(fileData.ECU_time);
-    out.RPM                      = zipECU(fileData.RPM);
-    out.Manifold_air_pressure    = zipECU(fileData.Manifold_air_pressure);
-    out.Manifold_air_temperature = zipECU(fileData.Manifold_air_temperature);
-    out.Coolant_temperature      = zipECU(fileData.Coolant_temperature);
-    out.Main_pulsewidth_bank1    = zipECU(fileData.Main_pulsewidth_bank1);
-    out.Main_pulsewidth_bank2    = zipECU(fileData.Main_pulsewidth_bank2);
-    out.Throttle_position        = zipECU(fileData.Throttle_position);
-    out.Battery_voltage          = zipECU(fileData.Battery_voltage);
-    out.Air_density_correction   = zipECU(fileData.Air_density_correction);
-    out.Warmup_correction        = zipECU(fileData.Warmup_correction);
-    out.TPS_based_acceleration   = zipECU(fileData.TPS_based_acceleration);
-    out.TPS_based_fuel_cut       = zipECU(fileData.TPS_based_fuel_cut);
-    out.Total_fuel_correction    = zipECU(fileData.Total_fuel_correction);
-    out.VE_value_table_bank1     = zipECU(fileData.VE_value_table_bank1);
-    out.VE_value_table_bank2     = zipECU(fileData.VE_value_table_bank2);
-    out.Cold_advance             = zipECU(fileData.Cold_advance);
-    out.Rate_of_change_of_TPS    = zipECU(fileData.Rate_of_change_of_TPS);
-    out.Rate_of_change_of_RPM    = zipECU(fileData.Rate_of_change_of_RPM);
-    out.Sync_loss_counter        = zipECU(fileData.Sync_loss_counter);
-    out.Sync_loss_reason_code    = zipECU(fileData.Sync_loss_reason_code);
-    out.Average_fuel_flow        = zipECU(fileData.Average_fuel_flow);
-    out.Damper_Left_Rear         = zipECU(fileData.Damper_Left_Rear);
-    out.Damper_Right_Rear        = zipECU(fileData.Damper_Right_Rear);
-    out.Gear                     = zipECU(fileData.Gear);
-    out.Brake_Pressure           = zipECU(fileData.Brake_Pressure);
-    out.BSPD                     = zipECU(fileData.BSPD);
-    out.Damper_Left_Front        = zipECU(fileData.Damper_Left_Front);
-    out.Damper_Right_Front       = zipECU(fileData.Damper_Right_Front);
-    out.Steering_Angle           = zipECU(fileData.Steering_Angle);
-    out.Acceleration_on_X_axis   = zipECU(fileData.Acceleration_on_X_axis);
-    out.Acceleration_on_Y_axis   = zipECU(fileData.Acceleration_on_Y_axis);
-    out.Acceleration_on_Z_axis   = zipECU(fileData.Acceleration_on_Z_axis);
-    out.Gyroscope_on_X_axis      = zipECU(fileData.Gyroscope_on_X_axis);
-    out.Gyroscope_on_Y_axis      = zipECU(fileData.Gyroscope_on_Y_axis);
-    out.Gyroscope_on_Z_axis      = zipECU(fileData.Gyroscope_on_Z_axis);
+    // 3. Helper to extract column data from the row array
+    const extract = (targetKey) => {
+      const sourceKey = keyMap[targetKey] || targetKey;
+      
+      return fileData.map(row => {
+        // Timestamp handling
+        const ts = Number(row.timestamp);
+        
+        // Handle values: Check if exists, else null
+        let val = null;
+        if (targetKey === "ECU_time") {
+            val = ts; // Map timestamp to value for ECU_time series
+        } else if (sourceKey in row) {
+            val = Number(row[sourceKey]);
+        }
+        
+        return [ts, val];
+      });
+    };
 
+    // 4. Construct the Output Object (Same structure as your old code)
+    const out = {};
+    Object.keys(keyMap).forEach(key => {
+        out[key] = extract(key);
+    });
+
+    // Pass through lap data if it exists in fileData
     out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] };
+    
     return out;
   }, [fileData]);
 
 
-
-
-  // Gates filtering
+  // Gates filtering (Dependent on allSeries)
   const gatesArray = useMemo(() => {
-    const { timestamps = [], lap_data = [] } = allSeries.Gates_times;
+    const { timestamps = [], lap_data = [] } = allSeries.Gates_times || {};
     if (selectedTs) {
       const startTs = new Date(selectedTs.startTime).getTime() / 1000;
       const endTs   = new Date(selectedTs.endTime)  .getTime() / 1000;
@@ -148,7 +185,7 @@ export default function Dashboard() {
       end:   lap_data[i]?.ts ?? ts,
       label: lap_data[i]?.lap ?? `Lap ${i + 1}`,
     }));
-  }, [allSeries.Gates_times, selectedTs]);
+  }, [allSeries, selectedTs]);
 
   const [startSec, endSec] = useMemo(() => {
     if (selectedLap != null && gatesArray[selectedLap]) {
@@ -164,7 +201,6 @@ export default function Dashboard() {
   }, [selectedLap, selectedTs, gatesArray]);
 
   const filtered = useMemo(() => {
-    
     if (startSec == null || endSec == null) return allSeries;
 
     return Object.fromEntries(
@@ -175,24 +211,23 @@ export default function Dashboard() {
           : series.filter(([ts]) => ts >= startSec && ts <= endSec),
       ])
     );
-    
   }, [allSeries, startSec, endSec]);
 
   const mapData = useMemo(() => {
-  const L = filtered.GPS_Latitude;
-  const O = filtered.GPS_Longitude;
-  const S = filtered.GPS_Speed; // [[ts, speed], ...]
-  return L.map(([, lat], i) => [
-    O[i]?.[1] ?? 0,
-    lat,
-    S[i]?.[1] ?? 0,     // speed
-    S[i]?.[0],          // timestamp (sec or ms; MapChart normalizes)
-  ]);
-}, [filtered]);
+    const L = filtered.GPS_Latitude || [];
+    const O = filtered.GPS_Longitude || [];
+    const S = filtered.GPS_Speed || []; 
+    return L.map(([, lat], i) => [
+      O[i]?.[1] ?? 0,
+      lat,
+      S[i]?.[1] ?? 0,     // speed
+      S[i]?.[0],          // timestamp
+    ]);
+  }, [filtered]);
 
 
-  const timeStamps = (arr) => arr.map(([ts]) => ts * 1000);
-  const makeSeries = (arr, name, unit) => ({ name, data: arr.map(([, v]) => v), unit });
+  const timeStamps = (arr) => arr ? arr.map(([ts]) => ts * 1000) : [];
+  const makeSeries = (arr, name, unit) => ({ name, data: arr ? arr.map(([, v]) => v) : [], unit });
 
   // Distance charts
   const haversine = (lat1, lon1, lat2, lon2) => {
@@ -207,8 +242,9 @@ export default function Dashboard() {
   };
 
   const speedVsDistance = useMemo(() => {
-    console.log("Data from backend",filtered)
-    if (selectedLap == null) return { dist: [], speed: [] };
+    // console.log("Data from backend", filtered)
+    if (selectedLap == null || !filtered.GPS_Latitude) return { dist: [], speed: [] };
+    
     const coords = filtered.GPS_Latitude.map(([, lat], i) => ({
       lat,
       lon: filtered.GPS_Longitude[i]?.[1] ?? 0,
@@ -222,115 +258,94 @@ export default function Dashboard() {
       dist.push(dist[i - 1] + dKm);
     }
     return { dist, speed: coords.map((pt) => pt.speed) };
-  }, [filtered.GPS_Latitude, filtered.GPS_Longitude, filtered.GPS_Speed, selectedLap]);
+  }, [filtered, selectedLap]);
 
 
-// helpers (put once, e.g. top of Dashboard.jsx)
-const toPairsMsSorted = (arr = []) =>
-  arr
-    .filter(([ts, v]) => Number.isFinite(ts) && v != null)
-    .sort((a, b) => a[0] - b[0])
-    .map(([ts, v]) => [ts * 1000, Number(v)]);
+  // helpers (put once, e.g. top of Dashboard.jsx)
+  const toPairsMsSorted = (arr = []) =>
+    arr
+      .filter(([ts, v]) => Number.isFinite(ts) && v != null)
+      .sort((a, b) => a[0] - b[0])
+      .map(([ts, v]) => [ts * 1000, Number(v)]);
 
-const makeSeriesPairs = (arr, name, unit) => ({
-  name, unit, data: toPairsMsSorted(arr),
-});
-//build the aligned times series
-const toMsArr = (arr) => arr.map((t) => (t > 2e10 ? Number(t) : Number(t) * 1000));
+  const makeSeriesPairs = (arr, name, unit) => ({
+    name, unit, data: toPairsMsSorted(arr),
+  });
+  //build the aligned times series
+  const toMsArr = (arr) => arr ? arr.map((t) => (t > 2e10 ? Number(t) : Number(t) * 1000)) : [];
 
-// seconds→ms normalizer (handles numbers or strings)
-// normalize timestamps to ms (handles numbers/strings; seconds → ms)
-const toMs = (t) => {
-  const n = Number(t);
-  if (!Number.isFinite(n)) return NaN;
-  return n < 2e10 ? n * 1000 : n; // treat small epoch values as seconds
-};
-const normalizePairs = (pairs = []) =>
-  pairs
-    .map(([t, v]) => [toMs(t), Number(v)])
-    .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
+  // seconds→ms normalizer (handles numbers or strings)
+  const toMs = (t) => {
+    const n = Number(t);
+    if (!Number.isFinite(n)) return NaN;
+    return n < 2e10 ? n * 1000 : n; // treat small epoch values as seconds
+  };
+  const normalizePairs = (pairs = []) =>
+    pairs
+      .map(([t, v]) => [toMs(t), Number(v)])
+      .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
 
-// [Label, filteredKey, unit]
-const SIGNAL_SPECS = [
-  ["Seconds ECU on",           "ECU_time",                  "s"],
-  ["Main pulsewidth bank 1",   "Main_pulsewidth_bank1",     "ms"],
-  ["Main pulsewidth bank 2",   "Main_pulsewidth_bank2",     "ms"],
-  ["Engine RPM",               "RPM",                       "RPM"],
+  // [Label, filteredKey, unit]
+  const SIGNAL_SPECS = [
+    ["Seconds ECU on",           "ECU_time",                  "s"],
+    ["Main pulsewidth bank 1",   "Main_pulsewidth_bank1",     "ms"],
+    ["Main pulsewidth bank 2",   "Main_pulsewidth_bank2",     "ms"],
+    ["Engine RPM",               "RPM",                       "RPM"],
+    ["AFR Target 1",             "AFR_Target1",               "AFR"],
+    ["AFR Target 2",             "AFR_Target2",               "AFR"],
+    ["Manifold air pressure",    "Manifold_air_pressure",     "kPa"],
+    ["Manifold air temperature", "Manifold_air_temperature",  "°C"], 
+    ["Coolant temperature",      "Coolant_temperature",       "°C"], 
+    ["Throttle",                 "Throttle_position",         "%"],
+    ["Battery voltage",          "Battery_voltage",           "V"],
+    ["Air density correction",   "Air_density_correction",    "%"],
+    ["Warmup correction",        "Warmup_correction",         "%"],
+    ["TPS-based acceleration",   "TPS_based_acceleration",    "%/s"],
+    ["TPS-based fuel cut",       "TPS_based_fuel_cut",        "%"],
+    ["Total fuel correction",    "Total_fuel_correction",     "%"],
+    ["VE value table/bank 1",    "VE_value_table_bank1",      "%"],
+    ["VE value table/bank 2",    "VE_value_table_bank2",      "%"],
+    ["Cold advance",             "Cold_advance",              "deg"],
+    ["Sync-loss counter",        "Sync_loss_counter",         ""],
+    ["Sync-loss reason code",    "Sync_loss_reason_code",     ""],
+    ["Average fuel flow",        "Average_fuel_flow",         "cc/min"],
+    ["GPS Latitude",             "GPS_Latitude",              "°"],
+    ["GPS Longitude",            "GPS_Longitude",             "°"],
+    ["GPS Speed",                "GPS_Speed",                 "km/h"],
+    ["Roll",                     "Roll",                      "°"],
+    ["Pitch",                    "Pitch",                     "°"],
+    ["Yaw",                      "Yaw",                       "°"],
+    ["Damper4",                  "Damper4",                   "mV"],
+    ["Acceleration XYZ",         "Acceleration_XYZ",          "m/s²"],
+    ["Gyro XYZ",                 "Gyro_XYZ",                  "°/s"],
+  ];
 
-  // AFR targets (include only if you have them)
-  ["AFR Target 1",             "AFR_Target1",               "AFR"],
-  ["AFR Target 2",             "AFR_Target2",               "AFR"],
-
-  ["Manifold air pressure",    "Manifold_air_pressure",     "kPa"],
-  ["Manifold air temperature", "Manifold_air_temperature",  "°C"], // change to °F if that’s your raw unit
-  ["Coolant temperature",      "Coolant_temperature",       "°C"], // change to °F if needed
-  ["Throttle",                 "Throttle_position",         "%"],
-  ["Battery voltage",          "Battery_voltage",           "V"],
-  ["Air density correction",   "Air_density_correction",    "%"],
-  ["Warmup correction",        "Warmup_correction",         "%"],
-  ["TPS-based acceleration",   "TPS_based_acceleration",    "%/s"],
-  ["TPS-based fuel cut",       "TPS_based_fuel_cut",        "%"],
-  ["Total fuel correction",    "Total_fuel_correction",     "%"],
-  ["VE value table/bank 1",    "VE_value_table_bank1",      "%"],
-  ["VE value table/bank 2",    "VE_value_table_bank2",      "%"],
-  ["Cold advance",             "Cold_advance",              "deg"],
-  // ["Rate of change of TPS",    "Rate_of_change_of_TPS",     "%/s"],
-  // ["Rate of change of RPM",    "Rate_of_change_of_RPM",     "RPM/s"],
-  ["Sync-loss counter",        "Sync_loss_counter",         ""],
-  ["Sync-loss reason code",    "Sync_loss_reason_code",     ""],
-  ["Average fuel flow",        "Average_fuel_flow",         "cc/min"],
-
-  // Chassis / status
-  // ["Damper Left Rear",         "Damper_Left_Rear",          "mV"],
-  // ["Damper Right Rear",        "Damper_Right_Rear",         "mV"],
-  // ["Damper Left Front",        "Damper_Left_Front",         "mV"],
-  // ["Damper Right Front",       "Damper_Right_Front",        "mV"],
-  // ["Gear",                     "Gear",                      ""],
-  // ["Brake Pressure",           "Brake_Pressure",            "bar"], // set to your real unit if different
-  // ["BSPD status",              "BSPD",                      ""],
-  // ["Steering Angle",           "Steering_Angle",            "°"],
-
-  // GPS & IMU
-  ["GPS Latitude",             "GPS_Latitude",              "°"],
-  ["GPS Longitude",            "GPS_Longitude",             "°"],
-  ["GPS Speed",                "GPS_Speed",                 "km/h"],
-  ["Roll",                     "Roll",                      "°"],
-  ["Pitch",                    "Pitch",                     "°"],
-  ["Yaw",                      "Yaw",                       "°"],
-
-  // Optional if present
-  ["Damper4",                  "Damper4",                   "mV"],
-  ["Acceleration XYZ",         "Acceleration_XYZ",          "m/s²"],
-  ["Gyro XYZ",                 "Gyro_XYZ",                  "°/s"],
-];
-
-// Build a dropdown catalog from `filtered` (only include signals that exist + non-empty)
-const buildSignalsCatalog = (filtered) => {
-  const out = {};
-  for (const [label, key, unit] of SIGNAL_SPECS) {
-    const pairs = filtered?.[key];
-    if (Array.isArray(pairs) && pairs.length) {
-      out[label] = { unit, pairs: normalizePairs(pairs) };
+  // Build a dropdown catalog from `filtered`
+  const buildSignalsCatalog = (filtered) => {
+    const out = {};
+    for (const [label, key, unit] of SIGNAL_SPECS) {
+      const pairs = filtered?.[key];
+      if (Array.isArray(pairs) && pairs.length) {
+        out[label] = { unit, pairs: normalizePairs(pairs) };
+      }
     }
-  }
-  return out;
-};
+    return out;
+  };
 
-// UseMemo so we compute this once per `filtered` change
-const signalsCatalog = useMemo(() => buildSignalsCatalog(filtered), [filtered]);
+  const signalsCatalog = useMemo(() => buildSignalsCatalog(filtered), [filtered]);
 
-// Picker state
-const [staged, setStaged] = useState([]);     // selections not yet rendered
-const [pick, setPick] = useState("");         // current dropdown choice
-const [committed, setCommitted] = useState([]); // what we actually render
+  // Picker state
+  const [staged, setStaged] = useState([]);     
+  const [pick, setPick] = useState("");         
+  const [committed, setCommitted] = useState([]); 
 
-const MAX_SIGNALS = 5;
-const available = Object.keys(signalsCatalog).filter(k => !staged.includes(k));
+  const MAX_SIGNALS = 5;
+  const available = Object.keys(signalsCatalog).filter(k => !staged.includes(k));
 
-const addPicked   = () => { if (pick && staged.length < MAX_SIGNALS) setStaged(prev => [...prev, pick]); setPick(""); };
-const removeStaged = (key) => setStaged(prev => prev.filter(k => k !== key));
-const createChart  = () => setCommitted(staged);
-const clearChart   = () => setCommitted([]);
+  const addPicked   = () => { if (pick && staged.length < MAX_SIGNALS) setStaged(prev => [...prev, pick]); setPick(""); };
+  const removeStaged = (key) => setStaged(prev => prev.filter(k => k !== key));
+  const createChart  = () => setCommitted(staged);
+  const clearChart   = () => setCommitted([]);
 
 
 
@@ -361,17 +376,18 @@ const clearChart   = () => setCommitted([]);
       {/* Map — render only after geoData is loaded */}
 
       <div className="flex gap-4 items-start">
-      <div className="grow">
-        {geoData && (
-          <MapChart
-            geoData={geoData}
-            data={mapData}
-            gates={gatesData}
-            width={1400}
-            height={400}
-          />
-        )}
-      </div>
+        <div className="grow">
+          {geoData && (
+            <MapChart
+              geoData={geoData}
+              data={mapData}
+              gates={gatesData}
+              width={900}
+              height={400}
+              // rotation={270}
+            />
+          )}
+        </div>
 
       {/* Lap times to the right of the map */}
       <LapTimesPanel

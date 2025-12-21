@@ -1,8 +1,6 @@
-// MapChart.jsx
 import PropTypes from "prop-types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as echarts from "echarts";
-// 1. Import Turf.js for geospatial calculations
 import * as turf from "@turf/turf";
 
 const MapChart = ({
@@ -13,11 +11,10 @@ const MapChart = ({
   width = "100%",
   height = "100%",
   gatePointCount = 20,
-  rotation = 0, // New prop: Rotation angle in degrees (e.g., 90)
+  rotation = 0,
 }) => {
   const chartRef = useRef(null);
   const chart = useRef(null);
-  // We'll store the (potentially rotated) map data here
   const [processedGeoData, setProcessedGeoData] = useState(null);
 
   // --- Helpers ---
@@ -29,6 +26,7 @@ const MapChart = ({
   };
 
   const fmtTime = (ms) => {
+    if (!Number.isFinite(ms)) return "--:--:--";
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     return new Intl.DateTimeFormat(undefined, {
       timeZone: tz,
@@ -40,44 +38,62 @@ const MapChart = ({
     }).format(ms);
   };
 
-  // Helper to rotate a single [lon, lat] point around a pivot
-  const rotatePoint = (coords, angle, pivot) => {
-    if (angle === 0 || !pivot) return coords;
-    const pt = turf.point(coords);
-    const rotated = turf.transformRotate(pt, angle, { pivot });
-    return rotated.geometry.coordinates;
+  // --- SAFETY FIX: Validate coords before Turf ---
+  const isValidCoord = (coords) => {
+    return (
+      Array.isArray(coords) &&
+      coords.length >= 2 &&
+      Number.isFinite(coords[0]) &&
+      Number.isFinite(coords[1])
+    );
   };
 
-  // --- 1. Process Map Data (Calculate Center & Rotate) ---
-  // Find the center of the map to use as a pivot point for rotation
-  const mapCenter = useMemo(() => geoData ? turf.center(geoData) : null, [geoData]);
+  const rotatePoint = (coords, angle, pivot) => {
+    // If no rotation or invalid inputs, return original
+    if (angle === 0 || !pivot || !isValidCoord(coords)) return coords;
+    
+    try {
+        const pt = turf.point(coords);
+        const rotated = turf.transformRotate(pt, angle, { pivot });
+        return rotated.geometry.coordinates;
+    } catch (e) {
+        // Fallback if turf fails
+        return coords;
+    }
+  };
+
+  // --- 1. Process Map Data ---
+  const mapCenter = useMemo(() => {
+     if (!geoData) return null;
+     try {
+         return turf.center(geoData);
+     } catch (e) {
+         console.warn("Invalid GeoJSON for Map Center:", e);
+         return null;
+     }
+  }, [geoData]);
 
   useEffect(() => {
     if (!geoData || !chartRef.current) return;
 
     let mapDataToRegister = geoData;
 
-    // If a rotation is provided, mathematically rotate the GeoJSON
     if (rotation !== 0 && mapCenter) {
-      mapDataToRegister = turf.transformRotate(geoData, rotation, {
-        pivot: mapCenter,
-      });
+      try {
+        mapDataToRegister = turf.transformRotate(geoData, rotation, {
+          pivot: mapCenter,
+        });
+      } catch (e) {
+        console.error("Failed to rotate map layout:", e);
+      }
     }
 
-    // Register the map (either original or rotated)
     echarts.registerMap(mapName, mapDataToRegister);
     setProcessedGeoData(mapDataToRegister);
 
-    // Initialize chart if not already done
     if (!chart.current) {
       chart.current = echarts.init(chartRef.current);
     }
-    
-    // Cleanup
-    return () => {
-      // We don't dispose here to avoid flashing, but in a real app 
-      // you might handle cleanup more carefully on unmount.
-    };
   }, [geoData, mapName, rotation, mapCenter]);
 
 
@@ -86,24 +102,28 @@ const MapChart = ({
     const rows = Array.isArray(data) ? data : [];
     let pts = [];
 
-    // First, normalize data
     for (const d of rows) {
       if (Array.isArray(d)) {
         const [lon, lat, speed, ts] = d;
-        pts.push({ value: [lon, lat, speed, toMs(ts)] });
+        if (Number.isFinite(lon) && Number.isFinite(lat)) {
+            pts.push({ value: [lon, lat, speed, toMs(ts)] });
+        }
       } else if (d && typeof d === "object") {
-        pts.push({
-          name: d.name ?? "",
-          value: [d.lon ?? d.lng, d.lat, d.speed ?? d.v ?? 0, toMs(d.ts ?? d.time)],
-        });
+        const lon = d.lon ?? d.lng;
+        const lat = d.lat;
+        if (Number.isFinite(lon) && Number.isFinite(lat)) {
+            pts.push({
+            name: d.name ?? "",
+            value: [lon, lat, d.speed ?? d.v ?? 0, toMs(d.ts ?? d.time)],
+            });
+        }
       }
     }
 
-    // Then, rotate points if necessary
+    // Rotate points
     if (rotation !== 0 && mapCenter) {
       pts = pts.map((pt) => {
         const [lon, lat, speed, time] = pt.value;
-        // Rotate only the coordinate part ([lon, lat])
         const rotatedCoords = rotatePoint([lon, lat], rotation, mapCenter);
         return { ...pt, value: [...rotatedCoords, speed, time] };
       });
@@ -118,18 +138,30 @@ const MapChart = ({
     const raw = Array.isArray(gates) ? gates : gates?.gates || [];
     let pts = [];
 
-    // First, generate interpolated points
-    raw.forEach(({ lon1, lat1, lon2, lat2, name }) => {
+    raw.forEach((gate) => {
+      // Ensure all coordinates exist and are numbers
+      const { lon1, lat1, lon2, lat2, name } = gate;
+      
+      if (
+        [lon1, lat1, lon2, lat2].some(v => !Number.isFinite(v))
+      ) {
+        return; // Skip invalid gates
+      }
+
       for (let i = 0; i <= gatePointCount; i++) {
         const t = i / gatePointCount;
+        // Interpolate
+        const lon = lon1 + (lon2 - lon1) * t;
+        const lat = lat1 + (lat2 - lat1) * t;
+        
         pts.push({
           name: name ?? "",
-          value: [lon1 + (lon2 - lon1) * t, lat1 + (lat2 - lat1) * t],
+          value: [lon, lat],
         });
       }
     });
 
-    // Then, rotate points if necessary
+    // Rotate
     if (rotation !== 0 && mapCenter) {
       pts = pts.map((pt) => ({
         ...pt,
@@ -147,11 +179,9 @@ const MapChart = ({
 
     chart.current.setOption(
       {
-        // Centering is handled by ECharts layout engine now
         geo: {
           map: mapName,
           roam: true,
-          // These two properties will center the map in the canvas
           left: "center",
           top: "middle",
           label: { show: false },
@@ -163,9 +193,8 @@ const MapChart = ({
           max: 90,
           calculable: true,
           orient: "horizontal",
-          // This centers the legend horizontally at the bottom
           left: "center",
-          bottom: 10,
+          bottom: 20,
           inRange: {
             color: ["#2c7bb6", "#1dfdec", "#00ff00", "#eaff00", "#d7191c"],
           },
@@ -180,7 +209,6 @@ const MapChart = ({
               const speed = p.value?.[2];
               const tms = p.value?.[3];
               const t = Number.isFinite(tms) ? fmtTime(tms) : "—";
-              // Speed value is now formatted to 1 decimal place
               return `Time: ${t}<br/>Speed: ${Number(speed).toFixed(1)} km/h`;
             }
             if (p.seriesName === "Gates") return `Gate: ${p.name || ""}`;
@@ -196,12 +224,11 @@ const MapChart = ({
             data: gpsPoints,
             zlevel: 1,
           },
-          // Switched Gates to 'lines' for better performance and cleaner look
           {
             name: "Gates",
-            type: "scatter", // Kept as scatter as per original code for now
+            type: "scatter",
             coordinateSystem: "geo",
-            symbolSize: 10,
+            symbolSize: 8,
             itemStyle: { color: "#000" },
             data: gatePoints,
             zlevel: 2,
@@ -211,7 +238,6 @@ const MapChart = ({
       { notMerge: true }
     );
     
-    // Resize handler to keep everything centered on window resize
     const handleResize = () => chart.current?.resize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
@@ -220,7 +246,6 @@ const MapChart = ({
 
 
   return (
-    // A flex container ensures the chart div is perfectly centered
     <div style={{ width, height, display: "flex", justifyContent: "center", alignItems: "center" }}>
       <div ref={chartRef} style={{ width: "100%", height: "100%" }} />
     </div>
@@ -228,8 +253,14 @@ const MapChart = ({
 };
 
 MapChart.propTypes = {
-  // ... (other propTypes are the same)
-  rotation: PropTypes.number, // New prop type
+  geoData: PropTypes.object,
+  mapName: PropTypes.string,
+  data: PropTypes.array,
+  gates: PropTypes.oneOfType([PropTypes.array, PropTypes.object]),
+  width: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  height: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  gatePointCount: PropTypes.number,
+  rotation: PropTypes.number,
 };
 
 export default MapChart;

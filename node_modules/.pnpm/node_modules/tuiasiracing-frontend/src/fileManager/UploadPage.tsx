@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { api } from '../services/api'; 
+// 1. Import the RaceTrackSelect component
+import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
 
 export default function UploadPage() {
   const navigate = useNavigate();
@@ -13,6 +15,8 @@ export default function UploadPage() {
   // --- SESSION STATE ---
   const [sessionFile, setSessionFile] = useState<File | null>(null);
   const [plotData, setPlotData] = useState<any[]>([]);
+  
+  // We still keep trackId state, but it gets updated by the dropdown now
   const [trackId, setTrackId] = useState("1"); 
 
   // --- TRACK STATE ---
@@ -23,6 +27,15 @@ export default function UploadPage() {
   // ==========================
   // 1. SESSION LOGIC
   // ==========================
+  
+  // 2. Define the handler for the dropdown
+  const onRaceTrackChange = (track: any) => {
+    if (track && track.id) {
+        console.log("Selected Track:", track.name, "ID:", track.id);
+        setTrackId(String(track.id));
+    }
+  };
+
   const handleSessionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
@@ -48,7 +61,7 @@ export default function UploadPage() {
     };
   };
 
-  const handleSaveSession = async () => {
+const handleSaveSession = async () => {
     if (!sessionFile) return;
     setUploading(true);
 
@@ -135,22 +148,19 @@ export default function UploadPage() {
     try {
       const layoutJson = await readJsonFile(layoutFile);
       const gatesJson = await readJsonFile(gatesFile);
-      
-      // Validate
+
       validateLayout(layoutJson);
       validateGates(gatesJson);
 
-      
+      // Upload files first
       const storedLayoutName = await api.uploadFile(layoutFile);
       const storedGatesName = await api.uploadFile(gatesFile);
 
-
       await api.saveTrack({
-          name: trackName,
-          gates: storedGatesName,       
-          coordinates: storedLayoutName 
+        name: trackName,
+        gates: storedGatesName,
+        coordinates: storedLayoutName 
       });
-      
 
       alert("✅ Track Saved Successfully!");
       setTrackName("");
@@ -202,6 +212,8 @@ export default function UploadPage() {
           {activeTab === 'session' && (
             <div className="space-y-6">
               <h2 className="text-xl font-semibold mb-4 text-center">Add New Telemetry File</h2>
+              
+              {/* File Input */}
               <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
                 <label className="block text-sm font-medium mb-2 text-gray-300">Select CSV File</label>
                 <input 
@@ -211,21 +223,22 @@ export default function UploadPage() {
                   className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-600 file:text-white hover:file:bg-red-500 cursor-pointer"
                 />
               </div>
+
               {sessionFile && (
                 <div className="p-4 bg-gray-700 rounded border border-gray-600">
                   <p className="text-sm"><strong>Selected:</strong> {sessionFile.name}</p>
                   <p className="text-sm"><strong>Data Points:</strong> {plotData.length}</p>
                 </div>
               )}
+
+              {/* 3. Replaced Manual Input with Dropdown */}
               <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Track ID</label>
-                <input 
-                  type="number" 
-                  value={trackId}
-                  onChange={e => setTrackId(e.target.value)}
-                  className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:border-red-500 focus:outline-none"
-                />
-              </div>
+                   <label htmlFor="race-track" className="block text-sm font-medium mb-2 text-gray-300">
+                       Race Track
+                   </label>
+                   <RaceTrackSelect onChange={onRaceTrackChange} />
+               </div>
+
               <div className="flex gap-4 mt-6">
                 <button onClick={() => navigate('/')} className="flex-1 py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded font-bold transition-colors">Cancel</button>
                 <button onClick={handleSaveSession} disabled={!sessionFile || uploading} className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-500 rounded font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{uploading ? 'Uploading...' : 'Save Session'}</button>

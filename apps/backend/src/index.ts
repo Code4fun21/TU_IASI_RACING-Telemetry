@@ -292,22 +292,26 @@ app.post('/api/timestamps', async (c)=>{
 return c.json({ success: true });
 });
 
-//GET /api/timestamps/filter
-app.get('/api/timestamps/filters', async (c)=>{
-  const column=c.req.query('column');
-  const value=c.req.query('value');
-  const validColumns = [ 'startTime', 'endTime', 'driverId', 'monopostId','sessionId'];
+// GET /api/timestamps/filters
+app.get('/api/timestamps/filters', async (c) => {
+  const column = c.req.query('column');
+  const value = c.req.query('value');
+  const validColumns = ['startTime', 'endTime', 'driverId', 'monopostId', 'sessionId'];
     
   if (!column || !validColumns.includes(column)) {
       return c.json({ error: 'Invalid or missing column parameter.' }, 400);
   }
-  const {results}=await c.env.DB.prepare(
-    `SELECT * FROM Timestamp WHERE ${column}=?`
+  
+  const { results } = await c.env.DB.prepare(
+    `SELECT * FROM Timestamp WHERE ${column} = ?`
   ).bind(value).all();
 
-  if(!results || results.length===0) return c.json({error:'Timestamp not found'},404);
+  // FIX: Return empty array [] instead of 404 error
+  if (!results || results.length === 0) {
+      return c.json([]); 
+  }
 
-  return c.json(results)
+  return c.json(results);
 });
 
 //DELETE /api/timestamps/filter
