@@ -1,8 +1,9 @@
 import { Dialog, DialogPanel, DialogTitle } from "@headlessui/react";
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Decoder } from "../services/CANDecoder";
+import { CANDecoder } from "../services/CANDecoder";
 import { api } from "../services/api";
+import { getType } from "@turf/turf";
 
 export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     const [isProcessing, setIsProcessing] = useState(false);
@@ -10,7 +11,7 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     // State to track if valid data is ready to view
     const [hasValidData, setHasValidData] = useState(false);
     const [checkingStatus, setCheckingStatus] = useState(true);
-    
+    const [trackData,setTrackData]=useState(null)
     const navigate = useNavigate();
 
     // 1. Check File Status on Open
@@ -64,66 +65,93 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
 
     // --- ACTION: DECODE ---
     const handleDecodeAndSave = async () => {
-        setIsProcessing(true);
+    setIsProcessing(true);
+    try {
+        // 1. Download Raw CSV
+        console.log("1. Downloading Raw:", session.csvFileName);
+        const rawBlob = await api.downloadFile(session.csvFileName);
+        
+        const rawText = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.readAsText(rawBlob);
+        });
+
+        // 2. Decoding
+        console.log("2. Decoding...");
+        const lines = rawText.split('\n');
+        const decodedRows = [];
+        const startIndex = lines[0].startsWith("timestamp") ? 1 : 0;
+
+        // Initialize Decoder
+        const decoder = new CANDecoder(); 
+        
         try {
-            // 1. Download Raw CSV
-            console.log("1. Downloading Raw:", session.csvFileName);
-            const rawBlob = await api.downloadFile(session.csvFileName);
-            
-            const rawText = await new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.readAsText(rawBlob);
-            });
-
-            // 2. Decode
-            console.log("2. Decoding...");
-            const lines = rawText.split('\n');
-            const decodedRows = [];
-            const startIndex = lines[0].startsWith("timestamp") ? 1 : 0;
-
-            for (let i = startIndex; i < lines.length; i++) {
-                const line = lines[i].trim();
-                if (!line) continue;
-                const decodedObj = Decoder.parse(line);
-                if (decodedObj) decodedRows.push(decodedObj);
-            }
-
-            if (decodedRows.length === 0) {
-                throw new Error("Decoding resulted in empty data. Check your CAN Map.");
-            }
-
-            // 3. Upload Decoded JSON
-            const jsonContent = JSON.stringify(decodedRows);
-            const targetFileName = session.decodedFileName || session.csvFileName.replace(".csv", "_decoded.json");
-            
-            const jsonBlob = new Blob([jsonContent], { type: "application/json" });
-            const jsonFile = new File([jsonBlob], targetFileName);
-
-            console.log("3. Uploading to Bucket:", targetFileName);
-            
-            // Force overwrite
-            await api.uploadFile(jsonFile, targetFileName);
-
-            // 4. Update Database (only if needed)
-            if (!session.decodedFileName) {
-                 console.log("4. Updating DB Metadata...");
-                 await api.updateSession(session.id, { decodedFileName: targetFileName });
-            }
-
-            alert(`Success! Decoded ${decodedRows.length} data points.`);
-            
-            // Update local state to show "View" button immediately
-            setHasValidData(true);
-            if (onSuccess) onSuccess();
-
+            // Wait for gates/coordinates to load BEFORE parsing
+            const trackData = await api.getTrackById(session.trackId);
+            setTrackData(trackData);
+            console.log("Fresh data:", trackData);
+            await decoder.setBaseCoordinates(trackData); 
         } catch (err) {
-            console.error("Decoding Failed:", err);
-            alert("Failed to decode file: " + err.message);
-        } finally {
-            setIsProcessing(false);
+            console.warn("Track/Gates not found, proceeding without lap timing:", err);
         }
-    };
+
+        // Loop through data
+        for (let i = startIndex; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line || line[0] === "t") continue;
+            
+            const decodedObj = decoder.parse(line); 
+            if (decodedObj) decodedRows.push(decodedObj);
+        }
+
+        if (decodedRows.length === 0) {
+            throw new Error("Decoding resulted in empty data. Check your CAN Map.");
+        }
+
+        // --- NEW STEP: Prepare the Combined Payload ---
+        
+        // 1. Get Lap Data from the decoder
+        const gatesData = decoder.getGatesData();
+
+        // 2. Wrap everything in one object
+        const filePayload = {
+            rows: decodedRows,     // The sensor data
+            Gates_times: gatesData // The calculated lap times
+        };
+
+        // 3. Stringify the NEW payload (not just decodedRows)
+        const jsonContent = JSON.stringify(filePayload); 
+        
+        // ----------------------------------------------
+
+        const targetFileName = session.decodedFileName || session.csvFileName.replace(".csv", "_decoded.json");
+        const jsonBlob = new Blob([jsonContent], { type: "application/json" });
+        const jsonFile = new File([jsonBlob], targetFileName);
+
+        console.log("3. Uploading to Bucket:", targetFileName);
+        
+        // Force overwrite
+        await api.uploadFile(jsonFile, targetFileName);
+
+        // 4. Update Database (only if needed)
+        if (!session.decodedFileName) {
+                console.log("4. Updating DB Metadata...");
+                await api.updateSession(session.id, { decodedFileName: targetFileName });
+        }
+
+        alert(`Success! Decoded ${decodedRows.length} data points.`);
+        
+        setHasValidData(true);
+        if (onSuccess) onSuccess();
+
+    } catch (err) {
+        console.error("Decoding Failed:", err);
+        alert("Failed to decode file: " + err.message);
+    } finally {
+        setIsProcessing(false);
+    }
+};
 
     return (
         <Dialog open={open} onClose={() => !isProcessing && setOpen(false)} className="relative z-50">

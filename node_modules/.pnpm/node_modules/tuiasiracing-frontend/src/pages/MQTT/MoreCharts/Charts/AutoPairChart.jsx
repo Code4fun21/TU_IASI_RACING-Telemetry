@@ -1,19 +1,20 @@
 import PropTypes from "prop-types";
 import { useMemo } from "react";
-import * as echarts from "echarts";
-import ChartWrapper from "../../../../ChartWrapper";
+import ReactECharts from 'echarts-for-react'; 
 
 const COLORS = ["#5470C6", "#91CC75", "#EE6666", "#73C0DE", "#FAC858"];
 const MIN_POINTS_FOR_SCATTER = 20;
 const EPS = 0.001;
+
+// --- STATIC HELPER FUNCTIONS ---
 
 function toNumberTs(t) {
   const n = Number(t);
   return Number.isFinite(n) ? n : Date.parse(t);
 }
 
-// make strictly increasing
 function enforceMonotonic(pairs) {
+  if (!Array.isArray(pairs)) return [];
   let last = -Infinity;
   const out = [];
   for (let i = 0; i < pairs.length; i++) {
@@ -28,7 +29,6 @@ function enforceMonotonic(pairs) {
   return out;
 }
 
-// binary search lower bound
 function lb(pairs, x) {
   let lo = 0, hi = pairs.length;
   while (lo < hi) {
@@ -39,7 +39,7 @@ function lb(pairs, x) {
 }
 
 function sampleToGrid(pairs, grid, { method = "linear", tol = 500 }) {
-  if (!pairs.length) return grid.map(t => [t, null]);
+  if (!pairs || !pairs.length) return grid.map(t => [t, null]);
   const out = new Array(grid.length);
   for (let i = 0; i < grid.length; i++) {
     const t = grid[i];
@@ -71,7 +71,6 @@ function sampleToGrid(pairs, grid, { method = "linear", tol = 500 }) {
   return out;
 }
 
-// choose the fastest series as base (smallest median dt)
 function pickFastestGrid(seriesPairs) {
   const med = arr => {
     if (!arr.length) return Infinity;
@@ -81,158 +80,174 @@ function pickFastestGrid(seriesPairs) {
   let bestIdx = 0, bestDt = Infinity;
   for (let i = 0; i < seriesPairs.length; i++) {
     const p = seriesPairs[i];
+    if(!p || p.length < 2) continue;
     const dts = [];
-    for (let k = 1; k < p.length; k++) {
+    const step = Math.max(1, Math.floor(p.length / 100)); 
+    for (let k = 1; k < p.length; k+=step) {
       const dt = p[k][0] - p[k-1][0];
       if (dt > 0) dts.push(dt);
     }
     const m = med(dts);
     if (m < bestDt) { bestDt = m; bestIdx = i; }
   }
-  return seriesPairs[bestIdx].map(([t]) => t);
+  return seriesPairs[bestIdx] ? seriesPairs[bestIdx].map(([t]) => t) : [];
 }
 
 export default function AutoPairChart({
-  series = [],          // [{ name, unit, time:[], data:[] } or { pairs:[ [ms,val], ... ] }]
+  series = [],
   height = 500,
-  group = null,
-  align = "none",       // "none" | "base-fastest"
+  align = "none",
   alignMethod = "linear",
   toleranceMs = 500,
   windowMs = null,
 }) {
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const fmtMs = (ts) =>
-    new Intl.DateTimeFormat(undefined, {
-      timeZone: tz, hour12: false,
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-      fractionalSecondDigits: 3,
-    }).format(ts);
+  const fmtMs = (ts) => {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: tz, hour12: false,
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        fractionalSecondDigits: 3,
+      }).format(ts);
+    } catch(e) { return ""; }
+  };
 
-  // Build per-series pairs
+  // 1. Build per-series pairs (Memoized)
   const pairsPerSeries = useMemo(() => {
+    if(!Array.isArray(series)) return [];
     return series.map((s) => {
+      let rawPairs = [];
       if (Array.isArray(s.pairs)) {
-        return { ...s, pairs: enforceMonotonic(s.pairs.slice().sort((a,b)=>toNumberTs(a[0])-toNumberTs(b[0]))) };
+        rawPairs = s.pairs;
+      } else if (Array.isArray(s.time) && Array.isArray(s.data)) {
+        const n = Math.min(s.time.length, s.data.length);
+        rawPairs = new Array(n);
+        for (let i = 0; i < n; i++) rawPairs[i] = [s.time[i], s.data[i]];
       }
-      const t = Array.isArray(s.time) ? s.time : [];
-      const y = Array.isArray(s.data) ? s.data : [];
-      const n = Math.min(t.length, y.length);
-      const pairs = new Array(n);
-      for (let i = 0; i < n; i++) pairs[i] = [t[i], y[i]];
-      return { ...s, pairs: enforceMonotonic(pairs.sort((a,b)=>toNumberTs(a[0])-toNumberTs(b[0]))) };
+      
+      return { 
+        ...s, 
+        pairs: enforceMonotonic(rawPairs.slice().sort((a,b)=>toNumberTs(a[0])-toNumberTs(b[0]))) 
+      };
     });
   }, [series]);
 
-  // Optional alignment to fastest grid
+  // 2. Optional alignment (Memoized)
   const aligned = useMemo(() => {
     if (align !== "base-fastest" || pairsPerSeries.length === 0)
       return pairsPerSeries.map(s => ({ ...s, data: s.pairs }));
 
     const grid = pickFastestGrid(pairsPerSeries.map(s => s.pairs));
+    if(!grid.length) return pairsPerSeries.map(s => ({ ...s, data: s.pairs }));
+
     return pairsPerSeries.map(s => ({
       ...s,
       data: sampleToGrid(s.pairs, grid, { method: alignMethod, tol: toleranceMs }),
     }));
   }, [pairsPerSeries, align, alignMethod, toleranceMs]);
 
-  // If we didn't realign, use original pairs
+  // 3. Final Series Ready for Chart
   const ready = useMemo(() => {
-    if (align === "base-fastest")
-      return aligned;
-    return pairsPerSeries.map(s => ({ ...s, data: s.pairs }));
-  }, [aligned, pairsPerSeries, align]);
+    return aligned; 
+  }, [aligned]);
 
-  // Global x span
-  const allT = ready.flatMap(s => s.data.map(p => p[0])).filter(Number.isFinite);
-  const minTs = allT.length ? Math.min(...allT) : undefined;
-  const maxTs = allT.length ? Math.max(...allT) : undefined;
-  const span  = (minTs != null && maxTs != null) ? (maxTs - minTs) : 0;
+  // 4. Calculate Chart Options
+  const options = useMemo(() => {
+    if (!ready || ready.length === 0) return {};
 
-  const isSparse = Math.max(0, ...ready.map(s => s.data.length)) < MIN_POINTS_FOR_SCATTER;
+    const allT = ready.flatMap(s => s.data.map(p => p[0])).filter(Number.isFinite);
+    const minTs = allT.length ? Math.min(...allT) : undefined;
+    const maxTs = allT.length ? Math.max(...allT) : undefined;
+    const span  = (minTs != null && maxTs != null) ? (maxTs - minTs) : 0;
 
-  let xMin, xMax;
-  if (isSparse && minTs != null && maxTs != null) {
-    const pad = Math.max(5, Math.round(span * 0.05));
-    xMin = minTs - pad; xMax = maxTs + pad;
-  }
-
-  const yAxis = ready.map((s, i) => ({
-    type: "value",
-    name: s.name,
-    position: i === 0 ? "left" : "right",
-    offset: i >= 2 ? (i - 1) * 65 : 0,
-    axisLine: { lineStyle: { color: COLORS[i % COLORS.length] } },
-    axisLabel: { formatter: `{value} ${s.unit || ""}` },
-  }));
-
-  const seriesOpts = ready.map((s, i) => {
-  const color = COLORS[i % COLORS.length];
-  return {
-    name: s.name,
-    yAxisIndex: i,
-    type: "line",                 // always line
-    data: s.data,
-    emphasis: { focus: "series" },
-    lineStyle: { color, width: 2 },
-    showSymbol: false,
-    sampling: "lttb",
-    connectNulls: true,           // <-- makes it visually continuous
-  };
-});
-
-
-  const dataZoom = useMemo(() => {
-    if (minTs == null || maxTs == null) {
-      return [{ type: "inside", throttle: 50 }, { type: "slider", height: 18, bottom: 8 }];
+    const isSparse = Math.max(0, ...ready.map(s => s.data.length)) < MIN_POINTS_FOR_SCATTER;
+    let xMin = null, xMax = null;
+    if (isSparse && minTs != null && maxTs != null) {
+      const pad = Math.max(5, Math.round(span * 0.05));
+      xMin = minTs - pad; xMax = maxTs + pad;
     }
-    if (!windowMs || windowMs <= 0 || windowMs >= span) {
-      return [{ type: "inside", throttle: 50 }, { type: "slider", height: 18, bottom: 8, filterMode: "none" }];
-    }
-    const startValue = Math.max(minTs, maxTs - windowMs);
-    return [
-      { type: "inside", throttle: 50, zoomOnMouseWheel: "shift", moveOnMouseMove: true, moveOnMouseWheel: true, zoomLock: true, xAxisIndex: [0] },
-      { type: "slider", height: 18, bottom: 8, filterMode: "none", startValue, endValue: startValue + windowMs, zoomLock: true, brushSelect: false, handleSize: 12 },
-    ];
-  }, [minTs, maxTs, span, windowMs]);
 
-  const options = {
-    color: COLORS,
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "cross" },
-      formatter: (params) => {
-        const ts = params[0]?.value?.[0];
-        let out = `<b>${fmtMs(ts)}</b><br/>`;
-        params.forEach((p) => {
-          const unit = ready[p.seriesIndex]?.unit ?? "";
-          out += `<span style="color:${p.color}">●</span> ${p.seriesName}: ${p.value[1]} ${unit}<br/>`;
-        });
-        return out;
+    const yAxis = ready.map((s, i) => ({
+      type: "value",
+      name: s.name,
+      position: i === 0 ? "left" : "right",
+      offset: i >= 2 ? (i - 1) * 60 : 0,
+      axisLine: { show: true, lineStyle: { color: COLORS[i % COLORS.length] } },
+      axisLabel: { formatter: `{value} ${s.unit || ""}` },
+      splitLine: { show: i === 0 }, // Only one grid
+    }));
+
+    const seriesOpts = ready.map((s, i) => ({
+      name: s.name,
+      yAxisIndex: i,
+      type: "line",
+      data: s.data,
+      emphasis: { focus: "series" },
+      lineStyle: { color: COLORS[i % COLORS.length], width: 2 },
+      showSymbol: false,
+      sampling: "lttb",
+      connectNulls: true,
+    }));
+
+    // Data Zoom
+    let dataZoom = [{ type: "inside", throttle: 50 }, { type: "slider", height: 20, bottom: 5 }];
+    if (windowMs && windowMs > 0 && windowMs < span && minTs != null && maxTs != null) {
+        const startValue = Math.max(minTs, maxTs - windowMs);
+        dataZoom = [
+            { type: "inside", throttle: 50, zoomOnMouseWheel: "shift", moveOnMouseMove: true, zoomLock: true },
+            { type: "slider", height: 20, bottom: 5, startValue, endValue: startValue + windowMs, zoomLock: true }
+        ];
+    }
+
+    return {
+      color: COLORS,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: (params) => {
+          if (!Array.isArray(params) || !params.length) return "";
+          const ts = params[0]?.value?.[0];
+          let out = `<b>${fmtMs(ts)}</b><br/>`;
+          params.forEach((p) => {
+            const unit = ready[p.seriesIndex]?.unit ?? "";
+            const val = p.value && p.value[1] != null ? Number(p.value[1]).toFixed(2) : "--";
+            out += `<span style="color:${p.color}">●</span> ${p.seriesName}: ${val} ${unit}<br/>`;
+          });
+          return out;
+        },
       },
-    },
-    toolbox: { right: 10, feature: { restore: {}, saveAsImage: {} } },
-    grid: { right: "22%", left: "10%", top: 30, bottom: 55 },
-    xAxis: { type: "time", min: xMin, max: xMax, boundaryGap: false, axisLabel: { hideOverlap: true, formatter: (v) => fmtMs(v) }, axisPointer: { label: { formatter: ({ value }) => fmtMs(value) } }, scale: true },
-    yAxis,
-    series: seriesOpts,
-    dataZoom,
-  };
+      grid: { 
+          right: ready.length > 2 ? "15%" : "8%", 
+          left: "8%", 
+          top: 30, 
+          bottom: 60 
+      },
+      xAxis: { 
+          type: "time", 
+          min: xMin, 
+          max: xMax, 
+          boundaryGap: false, 
+          axisLabel: { hideOverlap: true, formatter: (v) => fmtMs(v) } 
+      },
+      yAxis,
+      series: seriesOpts,
+      dataZoom,
+      animation: false,
+    };
+  }, [ready, windowMs]);
 
-  return <ChartWrapper options={options} style={{ width: "100%", height }} />;
+  return <ReactECharts option={options} style={{ height: height, width: "100%" }} notMerge={true} lazyUpdate={true} />;
 }
 
 AutoPairChart.propTypes = {
   series: PropTypes.arrayOf(PropTypes.shape({
     name: PropTypes.string.isRequired,
     unit: PropTypes.string,
-    // Either provide time+data OR pairs
     time: PropTypes.array,
     data: PropTypes.array,
     pairs: PropTypes.array,
   })).isRequired,
   height: PropTypes.number,
-  group: PropTypes.string,
   align: PropTypes.oneOf(["none", "base-fastest"]),
   alignMethod: PropTypes.oneOf(["linear", "nearest", "ffill"]),
   toleranceMs: PropTypes.number,

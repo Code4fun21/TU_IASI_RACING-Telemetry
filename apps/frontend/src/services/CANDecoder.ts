@@ -1,201 +1,604 @@
+import { Track } from "@telemetry/shared";
+import { api } from "../services/api";
+
 // ==========================================
-// 1. CONFIGURATION TYPES
+// 1. MATH & KALMAN UTILITIES
 // ==========================================
+
+class KalmanFilter2D {
+    x: [number, number]; 
+    P: [[number, number], [number, number]];
+    Q: [[number, number], [number, number]];
+    R: number;
+    readonly I: [[number, number], [number, number]] = [[1, 0], [0, 1]];
+    readonly H: [number, number] = [0, 1];
+    first: boolean = true;
+    lastTime: number = 0;
+
+    constructor(processQ: [[number, number], [number, number]] | null = null, measureR: number = 1e-1) {
+        this.Q = processQ || [[1e-3, 0], [0, 1e-2]];
+        this.R = measureR;
+        this.x = [0, 0];
+        this.P = [[1, 0], [0, 1]];
+    }
+
+    filter(measurement: number, timestamp: number): number {
+        if (this.first) {
+            this.x = [0, measurement];
+            this.lastTime = timestamp;
+            this.first = false;
+            return measurement;
+        }
+
+        let dt = timestamp - this.lastTime;
+        if (dt < 0) dt = 0;
+        this.lastTime = timestamp;
+
+        // Predict
+        const newX0 = this.x[0] + dt * this.x[1];
+        const newX1 = this.x[1];
+        this.x = [newX0, newX1];
+
+        const p00 = this.P[0][0]; const p01 = this.P[0][1];
+        const p10 = this.P[1][0]; const p11 = this.P[1][1];
+
+        const t00 = p00 + p01 * dt;
+        const t01 = p01;
+        const t10 = p10 + p11 * dt;
+        const t11 = p11;
+
+        const nextP00 = (t00 + dt * t10) + this.Q[0][0];
+        const nextP01 = (t01 + dt * t11) + this.Q[0][1];
+        const nextP10 = t10 + this.Q[1][0];
+        const nextP11 = t11 + this.Q[1][1];
+        this.P = [[nextP00, nextP01], [nextP10, nextP11]];
+
+        // Update
+        const y = measurement - this.x[1];
+        const S = this.P[1][1] + this.R;
+        const K0 = this.P[0][1] / S;
+        const K1 = this.P[1][1] / S;
+
+        this.x[0] = this.x[0] + K0 * y;
+        this.x[1] = this.x[1] + K1 * y;
+
+        const newP00 = this.P[0][0] - K0 * this.P[1][0];
+        const newP01 = this.P[0][1] - K0 * this.P[1][1];
+        const newP10 = this.P[1][0] * (1 - 0) - K1 * this.P[1][0];
+        const newP11 = this.P[1][1] - K1 * this.P[1][1];
+
+        this.P = [[newP00, newP01], [newP10, newP11]];
+
+        return this.x[1]; 
+    }
+}
+
+// ==========================================
+// 2. LAP TIMING ALGORITHMS (Ported from Python)
+// ==========================================
+
+class GPSPoint {
+    lat: number;
+    lon: number;
+    timestamp: number;
+    speed: number;
+
+    constructor(lat: number, lon: number, timestamp: number, speed: number) {
+        this.lat = lat;
+        this.lon = lon;
+        this.timestamp = timestamp;
+        this.speed = speed;
+    }
+}
+
+class GPS_Intersection {
+    gateL: GPSPoint;
+    gateR: GPSPoint;
+    prev: GPSPoint | null = null;
+    curr: GPSPoint | null = null;
+    currTime: number | null = null;
+
+    constructor(gL: GPSPoint, gR: GPSPoint) {
+        this.gateL = gL;
+        this.gateR = gR;
+    }
+
+    update_points(prev: GPSPoint, curr: GPSPoint) {
+        this.prev = prev;
+        this.curr = curr;
+    }
+
+    get_time() {
+        return this.currTime;
+    }
+
+    get_intersection_time(): boolean {
+        if (!this.prev || !this.curr) return false;
+
+        if (!this.do_intersect(this.prev, this.curr)) return false;
+
+        const x1 = this.prev.lon; const y1 = this.prev.lat;
+        const x2 = this.curr.lon; const y2 = this.curr.lat;
+        const x3 = this.gateL.lon; const y3 = this.gateL.lat;
+        const x4 = this.gateR.lon; const y4 = this.gateR.lat;
+
+        const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        const eps = 1e-12;
+        if (Math.abs(denom) < eps || !isFinite(denom)) return false;
+
+        const interLon = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom;
+        const interLat = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom;
+
+        if (!isFinite(interLon) || !isFinite(interLat)) return false;
+
+        const totalDist = Math.hypot(x2 - x1, y2 - y1);
+        if (totalDist < eps) return false;
+
+        const distToInter = Math.hypot(interLon - x1, interLat - y1);
+        const frac = Math.max(0.0, Math.min(1.0, distToInter / totalDist));
+
+        this.currTime = this.prev.timestamp + frac * (this.curr.timestamp - this.prev.timestamp);
+        return true;
+    }
+
+    do_intersect(p1: GPSPoint, q1: GPSPoint): boolean {
+        const o1 = this.orientation(p1, q1, this.gateL);
+        const o2 = this.orientation(p1, q1, this.gateR);
+        const o3 = this.orientation(this.gateL, this.gateR, p1);
+        const o4 = this.orientation(this.gateL, this.gateR, q1);
+
+        if (o1 !== o2 && o3 !== o4) return true;
+        if (o1 === 0 && this.on_segment(p1, this.gateL, q1)) return true;
+        if (o2 === 0 && this.on_segment(p1, this.gateR, q1)) return true;
+        if (o3 === 0 && this.on_segment(this.gateL, p1, this.gateR)) return true;
+        if (o4 === 0 && this.on_segment(this.gateL, q1, this.gateR)) return true;
+
+        return false;
+    }
+
+    orientation(p: GPSPoint, q: GPSPoint, r: GPSPoint): number {
+        const val = (q.lon - p.lon) * (r.lat - q.lat) - (q.lat - p.lat) * (r.lon - q.lon);
+        const eps = 1e-12;
+        if (Math.abs(val) < eps) return 0;
+        return val > 0 ? 1 : 2;
+    }
+
+    on_segment(p: GPSPoint, q: GPSPoint, r: GPSPoint): boolean {
+        return (
+            q.lon <= Math.max(p.lon, r.lon) && q.lon >= Math.min(p.lon, r.lon) &&
+            q.lat <= Math.max(p.lat, r.lat) && q.lat >= Math.min(p.lat, r.lat)
+        );
+    }
+}
+
+// ==========================================
+// 3. CONFIGURATION & DATABASE
+// ==========================================
+
+const MAIN_COORDS = [46, 23]; 
 
 interface SignalConfig {
-  name: string;
-  offset: number;
-  size: number;
-  // Standard Math
-  multiply?: number;
-  divide?: number;
-  add?: number;
-  isSigned?: boolean;
-  // Custom Logic (Optional)
-  method?: "Method1" | "Method2" | "DecimalGPS"; 
+    name: string;
+    offset: number;
+    size: number;
+    multiply?: number;
+    divide?: number;
+    add?: number;
+    isSigned?: boolean;
+    method?: string; 
 }
-
-// ==========================================
-// 2. CUSTOM ALGORITHMS (Implement your Math Here!)
-// ==========================================
-
-const CUSTOM_ALGORITHMS = {
-  /**
-   * Method 1: Used for Suspension/Damper pots?
-   * Example: Maybe converts 0-5V (0-4096) to mm of travel?
-   */
-  Method1: (rawValue: number) => {
-    // TODO: REPLACE THIS WITH YOUR FORMULA
-    // Example: return (rawValue * 0.5) - 100;
-    return rawValue; 
-  },
-
-  /**
-   * Method 2: Used for GPS Latitude/Longitude (3 bytes)
-   * A 3-byte integer usually needs scaling to become degrees.
-   */
-  Method2: (rawValue: number) => {
-    // TODO: CHECK YOUR DOCS. 
-    // Example: 3 bytes = 24 bits. Maybe divide by 10,000 or 60,000?
-    // This is a placeholder guess:
-    return rawValue / 100000.0;
-  },
-
-  /**
-   * Decimal Conversion: Used for GPS Speed
-   */
-  DecimalGPS: (rawValue: number) => {
-    // Example: Raw 105 -> 10.5 km/h
-    return rawValue / 10.0; 
-  }
-};
-
-// ==========================================
-// 3. THE DATABASE (Updated with Methods)
-// ==========================================
 
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
-  // Standard IDs (Linear Math)
-  "05F0": [{ name: "rpm", offset: 6, size: 2, multiply: 1, divide: 1 }],
-  "05F2": [
-    { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
-    { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10 },
-    { name: "coolantTemp",         offset: 6, size: 2, divide: 10 }
-  ],
-  "05F3": [
-    { name: "throttlePosition", offset: 0, size: 2, divide: 10 },
-    { name: "batteryVoltage",   offset: 2, size: 2, divide: 10 }
-  ],
-  "05F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide: 10 }],
-  "05F5": [
-    { name: "warmupCorrection",     offset: 0, size: 2, divide: 10 },
-    { name: "tpsBasedAcceleration", offset: 2, size: 2, divide: 10 },
-    { name: "tpsBasedFuelCut",      offset: 4, size: 2, divide: 10 }
-  ],
-  "05F6": [
-    { name: "totalFuelCorrection", offset: 0, size: 2, divide: 10 },
-    { name: "veBank1",             offset: 2, size: 2, divide: 10 },
-    { name: "veBank2",             offset: 4, size: 2, divide: 10 }
-  ],
-  "05F7": [
-    { name: "coldAdvance",   offset: 0, size: 2, divide: 10 },
-    { name: "tpsRateChange", offset: 2, size: 2, divide: 10 },
-    { name: "rpmRateChange", offset: 6, size: 2, multiply: 10 }
-  ],
-  "061B": [
-    { name: "syncLossCounter",    offset: 0, size: 1 },
-    { name: "syncLossReason",     offset: 1, size: 1 }
-  ],
-  "0624": [{ name: "fuelFlow", offset: 4, size: 2 }],
+    //SENSORS
+    "0115": [
+        { name: "damperLR",      offset: 0, size: 2, method: "Method1" },
+        { name: "damperRR",      offset: 2, size: 2, method: "Method1" },
+        { name: "gear",          offset: 4, size: 1 }, 
+        { name: "brakePressure", offset: 5, size: 2, method: "Method1" },
+        { name: "bspd",          offset: 7, size: 1 }
+    ],
+    "0116": [
+        { name: "damperLF",      offset: 0, size: 2, method: "Method1" },
+        { name: "damperRF",      offset: 2, size: 2, method: "Method1" },
+        { name: "steering",      offset: 4, size: 2, method: "Method1" }
+    ],
+    "0117": [
+        { name: "GPS_Latitude",  offset: 0, size: 3, method: "Method2_Lat" }, 
+        { name: "GPS_Longitude", offset: 3, size: 3, method: "Method2_Lon" },
+        { name: "GPS_Speed",     offset: 6, size: 1, multiply: 1 } 
+    ],
+    "0118": [
+        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc" },
+        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc" },
+        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc" }
+    ],
+    "0119": [
+        { name: "gyroX", offset: 0, size: 2, method: "Method_IMU_Gyro" },
+        { name: "gyroY", offset: 2, size: 2, method: "Method_IMU_Gyro" },
+        { name: "gyroZ", offset: 4, size: 2, method: "Method_IMU_Gyro" }
+    ],
 
-  // --- COMPLEX IDS (Using Custom Methods) ---
-  
-  // ID 115 (0x0073) - Steering, Brake, Gear
-  "0073": [ 
-    { name: "steering",      offset: 0, size: 2, method: "Method1" }, // Row 26
-    { name: "brakePressure", offset: 2, size: 2, method: "Method1" }, // Row 27
-    { name: "gear",          offset: 6, size: 1 }                     // Row 28 (Standard)
-  ],
 
-  // ID 116 (0x0074) - GPS
-  "0074": [
-    { name: "GPS_Latitude",  offset: 0, size: 3, method: "Method2" },    // Row 29
-    { name: "GPS_Longitude", offset: 3, size: 3, method: "Method2" },    // Row 30
-    { name: "GPS_Speed",     offset: 6, size: 1, method: "Method2" }  // Row 31
-  ],
 
-  // ID 112 (0x0070) - Dampers
-  "0070": [
-    { name: "damperLR", offset: 0, size: 2, method: "Method1" }, // Row 32
-    { name: "damperRR", offset: 2, size: 2, method: "Method1" }, // Row 33
-    { name: "damperLF", offset: 4, size: 2, method: "Method1" }, // Row 34
-    { name: "damperRF", offset: 6, size: 2, method: "Method1" }  // Row 35
-  ]
+    //MEGASQUIRT
+    "05F0": [{ name: "rpm", offset: 6, size: 2 }],
+    "05F2": [
+        { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
+        { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10 },
+        { name: "coolantTemp",         offset: 6, size: 2, divide: 10, method:"Convert_Temp" }
+    ],
+    "05F3": [
+        { name: "throttlePosition", offset: 0, size: 2, divide: 10 },
+        { name: "batteryVoltage",   offset: 2, size: 2, divide: 10 }
+    ],
+    "05F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide:10 }],
+    "05F5": [
+        { name: "warmupCorrection",     offset: 0, size: 2, divide: 10 },
+        { name: "tpsBasedAcceleration", offset: 2, size: 2, divide: 10 },
+        { name: "tpsBasedFuelCut",      offset: 4, size: 2, divide: 10 }
+    ],
+    "05F6": [
+        { name: "totalfuelCorrection", offset: 0, size: 2, divide: 10 },
+        { name: "veValueTable/bank1",  offset: 2, size: 2, divide: 10 },
+        { name: "veValueTable/bank2",  offset: 4, size: 2, divide: 10 }
+    ],
+    "05F7": [
+        { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
+        { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10   },
+        { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10 }
+    ],
+    "061B": [
+        { name: "sync-lossCounter",        offset: 0, size: 1 },
+        { name: "sync-lossReasonCode",     offset: 1, size: 1 }
+    ],
+    "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
 // ==========================================
-// 4. THE DECODER ENGINE
+// 4. THE DECODER CLASS
 // ==========================================
 
-export const Decoder = {
-  parse: (rawString: string) => {
-    try {
-      const parts = rawString.split(',');
-      if (parts.length < 3) return null;
+export class CANDecoder {
+    filters: { [key: string]: KalmanFilter2D };
+    ACCEL_SENS: number;
+    GYRO_SENS: number;
+    
+    // GPS State
+    mainCoords: [number, number]; 
+    prevPos: GPSPoint | null = null;
+    currPos: GPSPoint | null = null;
 
-      const timestamp = Number(parts[0]);
-      let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
-      
-      // Ensure ID is padded to match keys (e.g. "70" -> "0070" or "05F0")
-      // Adjust padding logic based on your specific ID length standard
-      if (canId.length < 4) canId = canId.padStart(4, "0");
+    // IMU Bias
+    imuBiasSamples: number;
+    imuBuffer: Record<string, number[]>;
+    imuBias: Record<string, number>;
+    
+    // Lap Tracking
+    gateCheckers: Record<string, GPS_Intersection> = {};
+    currentLap: Record<string, number | boolean | number> = {};
+    lapsHistory: any[] = [];
+    trackLen: number = 0;
+    gateIdx: number = 0;
+    justS0: boolean = false;
+    lapCount: number = 0;
 
-      const payloadHex = parts[2].trim();
-      const signals = CAN_DATABASE[canId];
-      if (!signals) return null;
+    constructor() {
+        const Q_Acc: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
+        const Q_Gyro: [[number, number], [number, number]] = [[1e-5, 0], [0, 1e-4]];
 
-      const buffer = hexToDataView(payloadHex);
-      const decodedValues: Record<string, number> = {};
+        this.filters = {
+            accX: new KalmanFilter2D(Q_Acc, 1e-1),
+            accY: new KalmanFilter2D(Q_Acc, 1e-1),
+            accZ: new KalmanFilter2D(Q_Acc, 1e-1),
+            gyroX: new KalmanFilter2D(Q_Gyro, 1e-3),
+            gyroY: new KalmanFilter2D(Q_Gyro, 1e-3),
+            gyroZ: new KalmanFilter2D(Q_Gyro, 1e-3),
+        };
 
-      for (const sig of signals) {
-        // 1. Read Raw Bytes
-        const rawVal = readBytes(buffer, sig.offset, sig.size, sig.isSigned);
-        
-        // 2. Apply Custom Method OR Standard Math
-        if (sig.method && CUSTOM_ALGORITHMS[sig.method]) {
-            decodedValues[sig.name] = CUSTOM_ALGORITHMS[sig.method](rawVal);
-        } else {
-            // Standard Linear: (Raw * Mult / Div) + Add
-            const mult = sig.multiply ?? 1;
-            const div = sig.divide ?? 1;
-            const add = sig.add ?? 0;
-            const finalVal = (rawVal * mult / div) + add;
-            decodedValues[sig.name] = Number(finalVal.toFixed(3));
-        }
-      }
+        this.ACCEL_SENS = 16384.0; 
+        this.GYRO_SENS  = 131.0;   
+        this.mainCoords = [0, 0];
 
-      return { timestamp, canId, ...decodedValues };
-
-    } catch (e) {
-      console.error("Decode Error:", e);
-      return null;
+        this.imuBiasSamples = 25; 
+        this.imuBuffer = {
+            accelerationX: [], accelerationY: [], accelerationZ: [],
+            gyroX: [], gyroY: [], gyroZ: []
+        };
+        this.imuBias = {};
     }
-  }
-};
 
-// --- HELPER FUNCTIONS ---
+// 1. Add 'async' keyword so we can wait for it
+async setBaseCoordinates(trackData: any) {
+    // Check if the URL string exists
+    if (!trackData || !trackData.gates) {
+        console.warn("No gates file found in trackData");
+        return;
+    }
 
-function hexToDataView(hex: string): DataView {
-  hex = hex.replace(/\s+/g, '');
-  // Safety: ensure even length
-  if (hex.length % 2 !== 0) hex = "0" + hex;
-  
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    // OLD: parseInt(hex.substr(i * 2, 2), 16);
-    // NEW: Use slice(start, end)
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return new DataView(bytes.buffer);
+    try {
+        // 2. Await the fetch
+        const data = await api.fetchJsonFile(trackData.gates);
+
+        // 3. Integrity Check: Ensure we have data
+        if (!Array.isArray(data) || data.length === 0) {
+            console.warn("Gates file downloaded but is empty or invalid.");
+            return;
+        }
+
+        // 4. Safe Parsing (Handle strings/numbers and use Math.floor)
+        // usage of Number() ensures "12.3" string becomes 12.3 number
+        const lat = Math.floor(Number(data[0].lat1)); 
+        const lon = Math.floor(Number(data[0].lon1));
+
+        this.mainCoords = [lat, lon];
+
+        data.forEach((g: any) => {
+            // Validate that coordinates exist
+            if (g.lat1 == null || g.lon1 == null || g.lat2 == null || g.lon2 == null) return;
+
+            const gL = new GPSPoint(Number(g.lat1), Number(g.lon1), 0, 0);
+            const gR = new GPSPoint(Number(g.lat2), Number(g.lon2), 0, 0);
+            
+            // Check if name exists, otherwise generate one
+            const gateName = g.name || `Gate_${Math.random().toString(36).substr(2, 5)}`;
+            this.gateCheckers[gateName] = new GPS_Intersection(gL, gR);
+        });
+
+        console.log(`Decoder Initialized: Base [${lat}, ${lon}], Gates: ${Object.keys(this.gateCheckers).join(', ')}`);
+        
+    } catch (err) {
+        console.warn("Failed to download or parse Gates file:", err);
+    }
 }
 
-function readBytes(view: DataView, offset: number, size: number, isSigned: boolean = false): number {
-  if (offset + size > view.byteLength) return 0;
+    parse(rawString: string) {
+        try {
+            const parts = rawString.split(',');
+            if (parts.length < 3) return null;
 
-  try {
-    switch (size) {
-      case 1: return isSigned ? view.getInt8(offset) : view.getUint8(offset);
-      case 2: return isSigned ? view.getInt16(offset, false) : view.getUint16(offset, false);
-      case 3: // 24-bit Integer (Custom)
-        // Read 3 bytes. We assume Big Endian: Byte0 << 16 | Byte1 << 8 | Byte2
-        const b0 = view.getUint8(offset);
-        const b1 = view.getUint8(offset + 1);
-        const b2 = view.getUint8(offset + 2);
-        return (b0 << 16) | (b1 << 8) | b2;
-      case 4: return isSigned ? view.getInt32(offset, false) : view.getUint32(offset, false);
-      default: return 0;
+            const timestamp = Number(parts[0]);
+            let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
+            if (canId.length < 4) canId = canId.padStart(4, "0");
+
+            const payloadHex = parts[2].trim();
+            const signals = CAN_DATABASE[canId];
+
+            if (!signals) return null;
+
+            const buffer = this.hexToDataView(payloadHex);
+            const decodedValues: Record<string, number> = {};
+
+            for (const sig of signals) {
+                const rawVal = this.readBytes(buffer, sig.offset, sig.size, sig.isSigned);
+                let finalVal = rawVal;
+
+                if (sig.method) {
+                    switch (sig.method) {
+                        case "Convert_Temp":
+                            const tempInF = rawVal / (sig.divide || 1); 
+                            const tempInC = (tempInF - 32) * 5 / 9;
+                            finalVal = tempInC;
+                            break;
+                        case "Method1": 
+                            const low = rawVal & 0xFF;
+                            const high = (rawVal >> 8) & 0xFF;
+                            finalVal = low + (high * 100);
+                            break;
+
+                        case "Method2_Lat":
+                            finalVal = this.convertMethod2(rawVal, 0);
+                            break;
+
+                        case "Method2_Lon":
+                            finalVal = this.convertMethod2(rawVal, 1);
+                            break;
+
+                        case "Method_IMU_Acc":
+                            finalVal = (rawVal / this.ACCEL_SENS) * 9.80665;
+                            finalVal = this.handleImuBias(sig.name, finalVal);
+                            finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                            break;
+
+                        case "Method_IMU_Gyro":
+                            finalVal = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
+                            finalVal = this.handleImuBias(sig.name, finalVal);
+                            finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                            break;
+                    }
+                } else {
+                    const mult = sig.multiply ?? 1;
+                    const div = sig.divide ?? 1;
+                    const add = sig.add ?? 0;
+                    finalVal = (rawVal * mult / div) + add;
+                }
+
+                decodedValues[sig.name] = Number(finalVal.toFixed(6));
+            }
+
+            // --- GPS POSITION & LAP TRACKING ---
+            if (decodedValues["GPS_Latitude"] && decodedValues["GPS_Longitude"]) {
+                const lat = decodedValues["GPS_Latitude"];
+                const lon = decodedValues["GPS_Longitude"];
+                const speed = decodedValues["GPS_Speed"] || 0;
+                
+                // Create current point
+                this.currPos = new GPSPoint(lat, lon, timestamp, speed);
+                
+                if (this.prevPos) {
+                    this.checkCross(timestamp, this.currPos);
+                }
+                
+                // Update history
+                this.prevPos = this.currPos;
+            }
+
+            return { timestamp, canId, ...decodedValues };
+
+        } catch (e) {
+            return null;
+        }
     }
-  } catch (e) {
-    return 0;
-  }
+
+    // --- ALGORITHMS ---
+
+    convertMethod2(rawValue: number, index: number): number {
+        if (rawValue === 0) return 0;
+        const strVal = rawValue.toString();
+        const divisor = Math.pow(10, strVal.length);
+        const decimalPart = rawValue / divisor;
+        return this.mainCoords[index] + decimalPart;
+    }
+
+    handleImuBias(name: string, val: number): number {
+        if (this.imuBias[name] !== undefined) {
+            return val - this.imuBias[name];
+        }
+        if (!this.imuBuffer[name]) this.imuBuffer[name] = [];
+        
+        if (this.imuBuffer[name].length < this.imuBiasSamples) {
+            this.imuBuffer[name].push(val);
+            return val; 
+        } else if (this.imuBuffer[name].length === this.imuBiasSamples) {
+            const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
+            this.imuBias[name] = sum / this.imuBiasSamples;
+            return val - this.imuBias[name];
+        }
+        return val;
+    }
+
+    applyKalman(name: string, val: number, timestamp: number): number {
+        let filterKey = "";
+        if (name.includes("accelerationX")) filterKey = "accX";
+        if (name.includes("accelerationY")) filterKey = "accY";
+        if (name.includes("accelerationZ")) filterKey = "accZ";
+        if (name.includes("gyroX")) filterKey = "gyroX";
+        if (name.includes("gyroY")) filterKey = "gyroY";
+        if (name.includes("gyroZ")) filterKey = "gyroZ";
+
+        if (filterKey && this.filters[filterKey]) {
+            return this.filters[filterKey].filter(val, timestamp);
+        }
+        return val;
+    }
+
+    // --- LAP LOGIC (Ported from Python) ---
+    checkCross(time: number, curr: GPSPoint) {
+        if (!this.prevPos) return;
+        const prev = this.prevPos;
+        const dist = this.haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+
+        // A. Check S0 (Start/Finish Line)
+        if (this.gateCheckers["S0"]) {
+            const s0 = this.gateCheckers["S0"];
+            s0.update_points(prev, curr);
+            
+            if (s0.get_intersection_time()) {
+                const t0 = s0.get_time();
+                
+                // If we have an S2 (last sector), this closes the previous lap
+                if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
+                    this.currentLap["S3"] = t0; // S3 is the finish time of current lap
+                    this.currentLap["complete"] = true;
+                    this.currentLap["dist"] = this.trackLen;
+                    this.currentLap["ts"] = t0; // Timestamp for indexing
+                    this.currentLap["lap"] = this.lapCount; // Lap number label
+
+                    // Save finished lap
+                    this.lapsHistory.push({ ...this.currentLap });
+                    console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
+                    
+                    // Reset for New Lap
+                    this.lapCount++;
+                    this.currentLap = { "S0": t0 };
+                    this.trackLen = 0;
+                    this.gateIdx = 1;
+                    this.justS0 = true;
+                } 
+                // First time crossing S0 (Start of Session)
+                else if (t0 && !this.currentLap["S0"]) {
+                    this.lapCount = 1;
+                    this.currentLap = { "S0": t0 };
+                    this.trackLen = 0;
+                    this.gateIdx = 1;
+                    this.justS0 = true;
+                    console.log("Session Started at S0");
+                }
+            }
+        }
+
+        // B. Check Sectors (S1, S2)
+        const seq = ["S0", "S1", "S2"];
+        if (this.gateIdx > 0 && this.gateIdx < seq.length) {
+            const targetGate = seq[this.gateIdx];
+            if (this.gateCheckers[targetGate]) {
+                const g = this.gateCheckers[targetGate];
+                g.update_points(prev, curr);
+                
+                if (g.get_intersection_time()) {
+                    const t = g.get_time();
+                    if (t) {
+                        this.currentLap[targetGate] = t;
+                        console.log(`Crossed ${targetGate}`);
+                        this.gateIdx++;
+                    }
+                }
+            }
+        }
+
+        // C. Accumulate Distance
+        if (this.gateIdx > 0 && !this.justS0) {
+            this.trackLen += dist;
+        }
+        this.justS0 = false;
+    }
+
+    // 2. NEW METHOD: Export Data for Frontend
+    getGatesData() {
+        // Return exactly what the Dashboard expects: { timestamps: [], lap_data: [] }
+        return {
+            timestamps: this.lapsHistory.map(l => l.ts || 0),
+            lap_data: this.lapsHistory
+        };
+    }
+
+    haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
+        const R = 6371000;
+        const toRad = (d: number) => d * Math.PI / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // --- HELPERS ---
+
+    hexToDataView(hex: string): DataView {
+        hex = hex.replace(/\s+/g, '');
+        if (hex.length % 2 !== 0) hex = "0" + hex;
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < bytes.length; i++) {
+            bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        }
+        return new DataView(bytes.buffer);
+    }
+
+    readBytes(view: DataView, offset: number, size: number, isSigned: boolean = false): number {
+        if (offset + size > view.byteLength) return 0;
+        try {
+            switch (size) {
+                case 1: return isSigned ? view.getInt8(offset) : view.getUint8(offset);
+                case 2: return isSigned ? view.getInt16(offset, false) : view.getUint16(offset, false); 
+                case 4: return isSigned ? view.getInt32(offset, false) : view.getUint32(offset, false);
+                case 3: 
+                    const b0 = view.getUint8(offset);
+                    const b1 = view.getUint8(offset + 1);
+                    const b2 = view.getUint8(offset + 2);
+                    return (b0 << 16) | (b1 << 8) | b2;
+                default: return 0;
+            }
+        } catch (e) {
+            return 0;
+        }
+    }
 }

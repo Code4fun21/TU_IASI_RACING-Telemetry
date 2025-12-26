@@ -1,9 +1,19 @@
 import mqtt from 'mqtt';
 import { useMqttStore } from '../store/MqttStore';
-import { Decoder } from './CANDecoder';
+import { CANDecoder } from './CANDecoder'; // 1. Import Class
+import { Track } from '@telemetry/shared';
 
+// Create a single instance for live decoding
+
+const decoder = new CANDecoder();
 export const MqttService = {
   client: null as mqtt.MqttClient | null,
+
+  
+  setTrack: (trackData:Track) => {
+    console.log("Setting Track Gates for Decoder...");
+    decoder.setBaseCoordinates(trackData);
+  },
 
   connect: (config: { broker: string; port: number; topic: string }) => {
     
@@ -43,12 +53,12 @@ export const MqttService = {
 
         // 3. Event Handlers
         MqttService.client.on('connect', () => {
-            console.log('MQTT Connected');
+            console.log('✅ MQTT Connected');
             useMqttStore.getState().setStatus(true);
             
             MqttService.client?.subscribe(config.topic, (err) => {
                 if (err) console.error("Subscription error:", err);
-                else console.log(`Subscribed to: ${config.topic}`);
+                else console.log(`📡 Subscribed to: ${config.topic}`);
             });
         });
 
@@ -56,8 +66,16 @@ export const MqttService = {
             if (topic === config.topic) {
                 try {
                     const rawString = payload.toString(); 
-                    const decodedObject = Decoder.parse(rawString);
+                    
+                    // FIX 2: Use the instance method .parse()
+                    
+                    const decodedObject = decoder.parse(rawString);
+                    
+                    // Only add if successfully decoded (not null)
+                    // If you want to keep raw strings even if decode fails, remove the check.
+                    // But usually, we want paired data.
                     useMqttStore.getState().addMessage(rawString, decodedObject);
+                    
                 } catch (e) {
                     console.error("Msg Error:", e);
                 }
@@ -65,7 +83,7 @@ export const MqttService = {
         });
 
         MqttService.client.on('error', (err) => {
-            console.error("MQTT Error:", err);
+            console.error("❌ MQTT Error:", err);
             useMqttStore.getState().setStatus(false);
         });
         

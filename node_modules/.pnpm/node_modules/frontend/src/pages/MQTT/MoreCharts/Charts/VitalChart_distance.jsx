@@ -1,211 +1,183 @@
-// src/components/DistanceChart.jsx
+import React, { useMemo } from 'react';
+import ReactECharts from 'echarts-for-react';
 import PropTypes from "prop-types";
-import { useEffect, useMemo, useRef } from "react";
-import * as echarts from "echarts";
-import ChartWrapper from "../../../../ChartWrapper";
+
 
 const COLORS = ["#5470C6", "#91CC75", "#EE6666", "#73C0DE", "#FAC858"];
 const MIN_POINTS_FOR_SCATTER = 20;
-const EPS_X = 0.001; // minimal bump (distance units) to keep X strictly increasing
+const EPS_X = 0.001;
 
-export default function DistanceChart({
-  distance = [],    // shared X in distance units
-  series   = [],    // [{ name, data: number[] OR [x,val][], unit }]
-  height   = 500,
-  group    = null,
-  windowMs = null,  // optional fixed window length (interpreted as distance units)
-}) {
-  const chartRef = useRef();
-
-  useEffect(() => {
-    if (group) echarts.connect(group);
-  }, [group]);
-
-  // ---- helper: enforce strictly increasing x per series ----
-  const enforceMonotonic = (pairs) => {
-    let last = -Infinity;
-    return pairs.map(([x, v]) => {
-      let t = Number(x);
-      if (!Number.isFinite(t)) return null;
+// --- STATIC HELPERS ---
+function enforceMonotonic(pairs) {
+  let last = -Infinity;
+  const out = [];
+  for (const p of pairs) {
+      let t = Number(p[0]);
+      let v = Number(p[1]);
+      if (!Number.isFinite(t)) continue;
       if (t <= last) t = last + EPS_X;
       last = t;
-      return [t, Number(v)];
-    }).filter(Boolean);
-  };
+      out.push([t, v]);
+  }
+  return out;
+}
 
-  // ---------- Normalize to [x, value] pairs; support y-only ----------
+const VitalChart_distance = ({ 
+  distance = [], 
+  series = [], 
+  height = 500, 
+  group = null,
+  windowMs = null // Interpreted as distance window here
+}) => {
+
+  // 1. Prepare Data
   const norm = useMemo(() => {
     const dx = Array.isArray(distance) ? distance : [];
+    
     return series.map((s) => {
       const d = Array.isArray(s.data) ? s.data : [];
+      if (d.length === 0) return { ...s, data: [] };
 
-      const looksLikePairs =
-        Array.isArray(d[0]) && d[0].length >= 2 && Number.isFinite(Number(d[0][0]));
+      let pairs = [];
 
-      let pairs;
-      if (looksLikePairs) {
-        pairs = d
-          .map(([x, v]) => [Number(x), Number(v)])
-          .filter(([x, v]) => Number.isFinite(x) && Number.isFinite(v))
-          .sort((a, b) => a[0] - b[0]);
+      // Check if data is already [[x,y], [x,y]]
+      const isPairs = Array.isArray(d[0]) && d[0].length >= 2;
+
+      if (isPairs) {
+         pairs = d.map(p => [Number(p[0]), Number(p[1])]);
       } else {
-        const n = Math.min(dx.length, d.length);
-        pairs = [];
-        for (let i = 0; i < n; i++) {
-          const x = Number(dx[i]);
-          const v = Number(d[i]);
-          if (Number.isFinite(x) && Number.isFinite(v)) pairs.push([x, v]);
-        }
-        pairs.sort((a, b) => a[0] - b[0]);
+         // Zip distance and values
+         const n = Math.min(dx.length, d.length);
+         for (let i = 0; i < n; i++) {
+             pairs.push([Number(dx[i]), Number(d[i])]);
+         }
       }
 
-      return { ...s, data: enforceMonotonic(pairs) };
+      // Sort by distance (X)
+      pairs.sort((a, b) => a[0] - b[0]);
+      
+      return { 
+          ...s, 
+          data: enforceMonotonic(pairs) 
+      };
     });
   }, [distance, series]);
 
-  // y-axes (one per series)
-  const yAxis = norm.map((s, i) => ({
-    type: "value",
-    name: s.name,
-    position: i === 0 ? "left" : "right",
-    offset: i >= 2 ? (i - 1) * 65 : 0,
-    axisLine: { lineStyle: { color: COLORS[i % COLORS.length] } },
-    axisLabel: { formatter: `{value} ${s.unit || ""}` },
-  }));
+  // 2. Calculate Chart Options
+  const option = useMemo(() => {
+    if (!norm || norm.length === 0 || norm[0].data.length === 0) return {};
 
-  // global X span
-  const { minX, maxX, span, maxN, isSparse } = useMemo(() => {
-    const allX = norm.flatMap(s => s.data.map(p => p[0])).filter(Number.isFinite);
-    const minX = allX.length ? Math.min(...allX) : undefined;
-    const maxX = allX.length ? Math.max(...allX) : undefined;
-    const span = minX != null && maxX != null ? (maxX - minX) : 0;
-    const maxN = Math.max(0, ...norm.map(s => s.data.length));
-    return { minX, maxX, span, maxN, isSparse: maxN > 0 && maxN < MIN_POINTS_FOR_SCATTER };
-  }, [norm]);
+    // Calculate X Range
+    const allX = norm.flatMap(s => s.data.map(p => p[0]));
+    let minX = Math.min(...allX);
+    let maxX = Math.max(...allX);
+    const span = maxX - minX;
 
-  // pad when sparse to avoid cramped x range
-  let xMin, xMax;
-  if (isSparse && minX != null && maxX != null) {
-    const pad = Math.max(5e-3, span * 0.05); // a small pad in distance units
-    xMin = minX - pad; xMax = maxX + pad;
+    // Check sparsity
+    const maxN = Math.max(...norm.map(s => s.data.length));
+    const isSparse = maxN < MIN_POINTS_FOR_SCATTER;
+
+    // Pad range if sparse
+    if (isSparse) {
+        const pad = Math.max(0.005, span * 0.05);
+        minX -= pad;
+        maxX += pad;
+    }
+
+    // Y Axes
+    const yAxis = norm.map((s, i) => ({
+        type: "value",
+        name: s.name,
+        position: i === 0 ? "left" : "right",
+        offset: i >= 2 ? (i - 1) * 60 : 0,
+        axisLine: { show: true, lineStyle: { color: COLORS[i % COLORS.length] } },
+        axisLabel: { formatter: `{value} ${s.unit || ""}` },
+        splitLine: { show: i === 0 }
+    }));
+
+    // Series
+    const seriesOpts = norm.map((s, i) => ({
+        name: s.name,
+        yAxisIndex: i,
+        type: isSparse ? "scatter" : "line",
+        symbolSize: isSparse ? 8 : 4,
+        showSymbol: isSparse,
+        smooth: true,
+        data: s.data,
+        lineStyle: { width: 2, color: COLORS[i % COLORS.length] },
+        itemStyle: { color: COLORS[i % COLORS.length] },
+        sampling: "lttb",
+    }));
+
+    // Zoom
+    let dataZoom = [{ type: "inside", throttle: 50 }, { type: "slider", height: 20, bottom: 5 }];
+    
+    if (windowMs && windowMs > 0 && windowMs < span) {
+         const startVal = Math.max(minX, maxX - windowMs);
+         dataZoom = [
+            { type: "inside", throttle: 50, moveOnMouseMove: true, zoomLock: true },
+            { type: "slider", height: 20, bottom: 5, startValue: startVal, endValue: startVal + windowMs, zoomLock: true }
+         ];
+    }
+
+    return {
+        color: COLORS,
+        tooltip: {
+            trigger: "axis",
+            axisPointer: { type: "cross" },
+            formatter: (params) => {
+                if (!Array.isArray(params) || !params.length) return "";
+                const xVal = params[0].value[0];
+                let tip = `<b>Dist: ${Number(xVal).toFixed(3)} km</b><br/>`;
+                params.forEach(p => {
+                    const unit = norm[p.seriesIndex]?.unit || "";
+                    const val = p.value[1] != null ? Number(p.value[1]).toFixed(2) : "--";
+                    tip += `<span style="color:${p.color}">●</span> ${p.seriesName}: ${val} ${unit}<br/>`;
+                });
+                return tip;
+            }
+        },
+        grid: { right: norm.length > 2 ? "15%" : "8%", left: "8%", top: 30, bottom: 60 },
+        xAxis: {
+            type: "value",
+            name: "Distance (km)",
+            min: minX,
+            max: maxX,
+            boundaryGap: false,
+            scale: true
+        },
+        yAxis: yAxis,
+        series: seriesOpts,
+        dataZoom: dataZoom,
+        animation: false
+    };
+  }, [norm, windowMs]);
+
+  if (!norm || norm.length === 0) {
+      return <div style={{ height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>No Distance Data</div>;
   }
 
-  // series (scatter when sparse, line otherwise)
-  const seriesOpts = norm.map((s, i) => {
-    const color = COLORS[i % COLORS.length];
-    const base = {
-      name: s.name,
-      yAxisIndex: i,
-      data: s.data,
-      emphasis: { focus: "series" },
-    };
-    return isSparse
-      ? { ...base, type: "scatter", symbolSize: 8, itemStyle: { color }, z: 3 }
-      : { ...base, type: "line", showSymbol: false, sampling: "lttb",
-          lineStyle: { color, width: 2 } };
-  });
-
-  // dataZoom (bottom slider); supports fixed-window scrolling if windowMs set
-  const sliderZoom = useMemo(() => {
-    if (minX == null || maxX == null) {
-      return [
-        { type: "inside", throttle: 50 },
-        { type: "slider", height: 18, bottom: 8 },
-      ];
-    }
-
-    if (!windowMs || windowMs <= 0 || windowMs >= span) {
-      // free zoom
-      return [
-        { type: "inside", throttle: 50 },
-        { type: "slider", height: 18, bottom: 8, filterMode: "none" },
-      ];
-    }
-
-    const startValue = Math.max(minX, maxX - windowMs);
-    const endValue   = startValue + windowMs;
-
-    return [
-      {
-        type: "inside",
-        throttle: 50,
-        zoomOnMouseWheel: "shift",
-        moveOnMouseMove: true,
-        moveOnMouseWheel: true,
-        zoomLock: true,            // fixed window length
-        xAxisIndex: [0],
-      },
-      {
-        type: "slider",
-        height: 18,
-        bottom: 8,
-        filterMode: "none",
-        startValue,
-        endValue,
-        zoomLock: true,
-        brushSelect: false,
-        handleSize: 12,
-      },
-    ];
-  }, [minX, maxX, span, windowMs]);
-
-  const options = {
-    color: COLORS,
-    tooltip: {
-      trigger: "axis",
-      axisPointer: { type: "cross" },
-      formatter: (params) => {
-        if (!params?.length) return "";
-        const x = params[0]?.value?.[0];
-        let out = `<b>Distance: ${Number(x).toFixed(3)}</b><br/>`;
-        params.forEach((p) => {
-          const unit = norm[p.seriesIndex]?.unit ?? "";
-          out += `<span style="color:${p.color}">●</span> ${p.seriesName}: ${p.value[1]} ${unit}<br/>`;
-        });
-        return out;
-      },
-    },
-    // Toolbox: keep ONLY Restore + Save (remove the first two buttons)
-    toolbox: {
-      right: 10,
-      feature: {
-        restore: {},
-        saveAsImage: {},
-      },
-    },
-    grid: { right: "22%", left: "10%", top: 30, bottom: 55 },
-    xAxis: {
-      type: "value",
-      name: "Distance",
-      min: xMin, max: xMax,
-      boundaryGap: false,
-      axisLabel: { hideOverlap: true, formatter: (val) => Number(val).toFixed(2) },
-      axisPointer: { label: { formatter: ({ value }) => Number(value).toFixed(3) } },
-      scale: true,
-    },
-    yAxis,
-    series: seriesOpts,
-    dataZoom: sliderZoom,
-  };
-
   return (
-    <div ref={chartRef} style={{ height }}>
-      <ChartWrapper options={options} group={group} style={{ width: "100%", height: "100%" }} />
-    </div>
+    <ReactECharts
+      option={option}
+      style={{ height, width: "100%" }}
+      notMerge={true}
+      lazyUpdate={true}
+      group={group}
+    />
   );
-}
-
-DistanceChart.propTypes = {
-  distance: PropTypes.arrayOf(PropTypes.number),
-  series: PropTypes.arrayOf(
-    PropTypes.shape({
-      name: PropTypes.string.isRequired,
-      unit: PropTypes.string,
-      data: PropTypes.array.isRequired, // number[] or [x,val][]
-    })
-  ).isRequired,
-  height: PropTypes.number,
-  group: PropTypes.string,
-  // same prop name as VitalChart; here it means "distance window"
-  windowMs: PropTypes.number,
 };
+
+VitalChart_distance.propTypes = {
+  distance: PropTypes.array,
+  series: PropTypes.arrayOf(PropTypes.shape({
+    name: PropTypes.string.isRequired,
+    data: PropTypes.array.isRequired,
+    unit: PropTypes.string
+  })).isRequired,
+  height: PropTypes.number,
+  windowMs: PropTypes.number,
+  group: PropTypes.string
+};
+
+export default VitalChart_distance;

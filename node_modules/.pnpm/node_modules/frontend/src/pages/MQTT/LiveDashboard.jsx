@@ -75,6 +75,8 @@ export default function LiveDashboard() {
         setGates(parsedGates);
         setTrackData({ ...track, coordinates: parsedLayout });
 
+        MqttService.setTrack(trackData)
+
       } catch (err) {
         console.error("Failed to load/parse track assets:", err);
       }
