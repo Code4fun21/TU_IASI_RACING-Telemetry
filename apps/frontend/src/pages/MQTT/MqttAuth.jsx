@@ -53,7 +53,7 @@ function MqttAuth() {
         const secs  = String(now.getSeconds()).padStart(2, '0');
         const timeStr = `${hours}-${mins}-${secs}`;
         // build filename
-        const rootName = `${raceTrack.name}_${timeStr}`;
+        const rootName = `${raceTrack.name}_${timeStr}_${dateStr}`;
         const session_payload={
             csvFileName:`${rootName}.csv`,
             decodedFileName:`${rootName}_decoded.csv`,

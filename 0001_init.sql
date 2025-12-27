@@ -48,7 +48,14 @@ CREATE TABLE Session (
       FOREIGN KEY (driverId) REFERENCES Driver(id),        
       FOREIGN KEY (monopostId) REFERENCES Monopost(id)     
   );
--- Seed some initial data (Optional, helps with testing)
-INSERT INTO Driver (name, weight) VALUES ('Test Driver', 75.5);
-INSERT INTO Track (name) VALUES ('Test Track');
-INSERT INTO Monopost (details) VALUES ('Car V1');
+
+  -- 1. Create the table to track usage
+CREATE TABLE IF NOT EXISTS system_limits (
+    id TEXT PRIMARY KEY,
+    count INTEGER DEFAULT 0,
+    last_reset TEXT
+);
+
+-- 2. Initialize the counters (Set them to 0 starting today)
+INSERT INTO system_limits (id, count, last_reset) VALUES ('d1_writes', 0, DATE('now'));
+INSERT INTO system_limits (id, count, last_reset) VALUES ('r2_uploads', 0, DATE('now'));

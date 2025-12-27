@@ -125,6 +125,7 @@ export default function Dashboard() {
                 "Rate_of_change_of_TPS": "rateOfchangeOfTPS", "Rate_of_change_of_RPM": "rateOfChangeOfRPM",
                 "Sync_loss_counter": "sync-lossCounter", "Sync_loss_reason_code": "sync-lossReasonCode",
                 "Average_fuel_flow": "averageFuelFlow",
+                "Distance": "Distance",
             };
             const sourceKey = keyMap[targetKey] || targetKey;
 
@@ -198,6 +199,7 @@ export default function Dashboard() {
             Sync_loss_counter: extract("Sync_loss_counter"), 
             Sync_loss_reason_code: extract("Sync_loss_reason_code"),
             Average_fuel_flow: extract("Average_fuel_flow"),
+            Distance: extract("Distance"),
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
@@ -205,19 +207,75 @@ export default function Dashboard() {
         return out;
     }, [rawData]);
 
+    const gatesArray = useMemo(() => {
+        // Access the raw Gates_times from the full series
+        const gates = allSeries.Gates_times;
+        
+        // Safety check
+        if (!gates || !Array.isArray(gates.lap_data)) return [];
+
+        return gates.lap_data.map((lap, index) => ({
+            label: `Lap ${index + 1}`,
+            index: index,
+            // Ensure we have valid start/end times in seconds
+            startTime: lap.S0, 
+            endTime: lap.S3 || lap.ts // S3 is finish line, ts is backup
+        })).filter(l => l.startTime && l.endTime);
+    }, [allSeries]);
+
     // ---------- FILTERING ----------
+// 2. Filter Data based on Lap OR Stint
     const filtered = useMemo(() => {
-        if (!selectedTs) return allSeries;
-        const start = Number(selectedTs.startTime);
-        const end = Number(selectedTs.endTime);
+        let minTime = -Infinity;
+        let maxTime = Infinity;
+        let isFiltering = false;
+
+        // PRIORITIZE LAP SELECTION
+        if (selectedLap !== null && gatesArray[selectedLap]) {
+            const lap = gatesArray[selectedLap];
+            minTime = lap.startTime;
+            maxTime = lap.endTime;
+            isFiltering = true;
+        } 
+        // FALLBACK TO STINT SELECTION
+        else if (selectedTs) {
+            // Ensure we compare seconds to seconds
+            // If selectedTs strings are ISO dates, convert to seconds
+            minTime = Number(selectedTs.startTime); 
+            maxTime = Number(selectedTs.endTime);
+            isFiltering = true;
+        }
+
+        // If no filter is active, return all data immediately (performance opt)
+        if (!isFiltering) return allSeries;
+
         const newFiltered = {};
+        
+        // Loop through all data series (RPM, Speed, etc.)
         Object.keys(allSeries).forEach(key => {
-            if (key === "Gates_times") newFiltered[key] = allSeries[key];
-            else if (Array.isArray(allSeries[key])) newFiltered[key] = allSeries[key].filter(pt => pt[0] >= start && pt[0] <= end);
-            else newFiltered[key] = allSeries[key];
+            // Always keep the Gates/Laps data intact so we don't break the lap selector
+            if (key === "Gates_times") {
+                newFiltered[key] = allSeries[key];
+                return;
+            }
+
+            const seriesData = allSeries[key];
+
+            // Only filter arrays (the actual sensor data)
+            if (Array.isArray(seriesData)) {
+                 // Keep points strictly within the time window
+                 newFiltered[key] = seriesData.filter(pt => {
+                     const t = pt[0]; // Timestamp is index 0
+                     return t >= minTime && t <= maxTime;
+                 });
+            } else {
+                 // Pass through non-array objects (meta data)
+                 newFiltered[key] = seriesData;
+            }
         });
+
         return newFiltered;
-    }, [allSeries, selectedTs]);
+    }, [allSeries, selectedLap, selectedTs, gatesArray]);
 
     // ==========================================
     // 2. VIEW HELPERS (For Old Render Compatibility)
@@ -236,15 +294,45 @@ export default function Dashboard() {
         ]).filter(p => p[0] !== 0 && p[1] !== 0);
     }, [filtered.GPS_Longitude, filtered.GPS_Latitude, filtered.GPS_Speed]);
 
-    const gatesArray = useMemo(() => {
-        return filtered.Gates_times?.lap_data?.map((l, i) => ({ label: `Lap ${i+1}`, index: i })) || [];
-    }, [filtered.Gates_times]);
+// 1. Build the list of laps from the full dataset
+    
 
-    const speedVsDistance = useMemo(() => {
-        // Distance calculation needs continuous data, usually handled in backend.
-        // Returning placeholder to prevent crash.
-        return { dist: [], speed: [] };
-    }, [selectedLap, filtered]);
+const speedVsDistance = useMemo(() => {
+    const distData = filtered.Distance;    // [[time, meters], ...] (Dense)
+    const speedData = filtered.GPS_Speed;  // [[time, km/h], ...]  (Sparse)
+
+    if (!distData || !speedData || distData.length === 0 || speedData.length === 0) {
+      return { dist: [], speed: [] };
+    }
+
+    const distOut = [];
+    const speedOut = [];
+
+    // We iterate through the SPEED data (since it's the limiting factor)
+    // and find the matching DISTANCE for that time.
+    
+    let distIdx = 0;
+    
+    for (let i = 0; i < speedData.length; i++) {
+        const [tSpeed, valSpeed] = speedData[i];
+
+        // Move the distance index forward until we catch up to the speed timestamp
+        // (Stop if we go past it)
+        while (distIdx < distData.length - 1 && distData[distIdx][0] < tSpeed) {
+            distIdx++;
+        }
+
+        // Check if the timestamps are close enough (e.g. within 100ms)
+        const [tDist, valDist] = distData[distIdx];
+        
+        if (Math.abs(tDist - tSpeed) < 0.1) {
+            distOut.push(valDist);
+            speedOut.push(valSpeed);
+        }
+    }
+
+    return { dist: distOut, speed: speedOut };
+  }, [filtered.Distance, filtered.GPS_Speed]);
 
     // UI Helpers
     const timeStamps = (arr) => arr ? arr.map(pt => pt[0]) : [];
@@ -297,7 +385,13 @@ export default function Dashboard() {
             {/* Timestamp selector */}
             <div className="rounded-lg bg-white p-4 shadow space-y-2">
                 <h3 className="font-medium text-gray-700">Choose Timestamp</h3>
-                <TimestampSelect sessionId={session?.id} onSelect={setSelectedTs} />
+                <TimestampSelect 
+                    sessionId={session?.id} 
+                    onSelect={(ts) => {
+                        setSelectedTs(ts);
+                        setSelectedLap(null); // <--- Auto-reset lap selection when changing stint
+                    }} 
+                />
             </div>
 
             {/* Lap selector */}

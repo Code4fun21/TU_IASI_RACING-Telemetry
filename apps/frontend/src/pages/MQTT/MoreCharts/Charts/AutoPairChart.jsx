@@ -13,6 +13,14 @@ function toNumberTs(t) {
   return Number.isFinite(n) ? n : Date.parse(t);
 }
 
+// Detects if 't' is seconds (small) or ms (large) and returns ms
+function toMs(t) {
+  const n = Number(t);
+  if (!Number.isFinite(n)) return NaN;
+  // If < 20 billion, it's seconds (year 2603), so multiply by 1000
+  return n < 2e10 ? n * 1000 : n;
+}
+
 function enforceMonotonic(pairs) {
   if (!Array.isArray(pairs)) return [];
   let last = -Infinity;
@@ -101,22 +109,30 @@ export default function AutoPairChart({
   toleranceMs = 500,
   windowMs = null,
 }) {
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   const fmtMs = (ts) => {
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        timeZone: tz, hour12: false,
-        hour: "2-digit", minute: "2-digit", second: "2-digit",
-        fractionalSecondDigits: 3,
-      }).format(ts);
-    } catch(e) { return ""; }
+      try {
+          return new Intl.DateTimeFormat(undefined, {
+              timeZone: tz, 
+              hour12: false,
+              hour: "2-digit", 
+              minute: "2-digit", 
+              second: "2-digit",
+              fractionalSecondDigits: 3,
+          }).format(ts);
+      } catch(e) { 
+          return ""; 
+      }
   };
 
   // 1. Build per-series pairs (Memoized)
   const pairsPerSeries = useMemo(() => {
-    if(!Array.isArray(series)) return [];
+    if (!Array.isArray(series)) return [];
     return series.map((s) => {
       let rawPairs = [];
+      
+      // Extract pairs based on input format
       if (Array.isArray(s.pairs)) {
         rawPairs = s.pairs;
       } else if (Array.isArray(s.time) && Array.isArray(s.data)) {
@@ -125,9 +141,13 @@ export default function AutoPairChart({
         for (let i = 0; i < n; i++) rawPairs[i] = [s.time[i], s.data[i]];
       }
       
+      // --- FIX: Normalize Time to MS Here ---
+      const normalizedPairs = rawPairs.map(p => [toMs(p[0]), Number(p[1])]);
+
       return { 
         ...s, 
-        pairs: enforceMonotonic(rawPairs.slice().sort((a,b)=>toNumberTs(a[0])-toNumberTs(b[0]))) 
+        // Sort by time (now in ms) and enforce monotonic
+        pairs: enforceMonotonic(normalizedPairs.sort((a, b) => a[0] - b[0])) 
       };
     });
   }, [series]);
@@ -187,6 +207,7 @@ export default function AutoPairChart({
       showSymbol: false,
       sampling: "lttb",
       connectNulls: true,
+      smooth: 0.2,
     }));
 
     // Data Zoom

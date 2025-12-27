@@ -3,7 +3,6 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { CANDecoder } from "../services/CANDecoder";
 import { api } from "../services/api";
-import { getType } from "@turf/turf";
 
 export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     const [isProcessing, setIsProcessing] = useState(false);
@@ -21,8 +20,11 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
             
             api.fetchJsonFile(session.decodedFileName)
                 .then((data) => {
-                    // STRICT CHECK: File exists AND has data points
-                    if (Array.isArray(data) && data.length > 0) {
+                    // --- FIX IS HERE: Support both Array (old) and Object (new) ---
+                    const isValidOldFormat = Array.isArray(data) && data.length > 0;
+                    const isValidNewFormat = data && Array.isArray(data.rows) && data.rows.length > 0;
+
+                    if (isValidOldFormat || isValidNewFormat) {
                         setHasValidData(true);
                     } else {
                         console.warn("Decoded file exists but is empty or invalid format.");
@@ -36,7 +38,7 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
                 .finally(() => setCheckingStatus(false));
         } else {
             setHasValidData(false);
-            if (open) setCheckingStatus(false); // Stop loading if no filename to check
+            if (open) setCheckingStatus(false); 
         }
     }, [open, session]);
 

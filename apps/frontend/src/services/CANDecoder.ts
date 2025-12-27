@@ -1,4 +1,3 @@
-import { Track } from "@telemetry/shared";
 import { api } from "../services/api";
 
 // ==========================================
@@ -74,7 +73,7 @@ class KalmanFilter2D {
 }
 
 // ==========================================
-// 2. LAP TIMING ALGORITHMS (Ported from Python)
+// 2. LAP TIMING ALGORITHMS
 // ==========================================
 
 class GPSPoint {
@@ -186,21 +185,22 @@ interface SignalConfig {
     add?: number;
     isSigned?: boolean;
     method?: string; 
+    filter?: boolean; // Set this to true in DB to enable Kalman
 }
 
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
-    //SENSORS
+    // SENSORS
     "0115": [
-        { name: "damperLR",      offset: 0, size: 2, method: "Method1" },
-        { name: "damperRR",      offset: 2, size: 2, method: "Method1" },
+        { name: "damperLR",      offset: 0, size: 2, method: "Method1", filter: true },
+        { name: "damperRR",      offset: 2, size: 2, method: "Method1", filter: true },
         { name: "gear",          offset: 4, size: 1 }, 
-        { name: "brakePressure", offset: 5, size: 2, method: "Method1" },
+        { name: "brakePressure", offset: 5, size: 2, method: "Method1", filter: true },
         { name: "bspd",          offset: 7, size: 1 }
     ],
     "0116": [
-        { name: "damperLF",      offset: 0, size: 2, method: "Method1" },
-        { name: "damperRF",      offset: 2, size: 2, method: "Method1" },
-        { name: "steering",      offset: 4, size: 2, method: "Method1" }
+        { name: "damperLF",      offset: 0, size: 2, method: "Method1", filter: true },
+        { name: "damperRF",      offset: 2, size: 2, method: "Method1", filter: true },
+        { name: "steering",      offset: 4, size: 2, method: "Method1", filter: true }
     ],
     "0117": [
         { name: "GPS_Latitude",  offset: 0, size: 3, method: "Method2_Lat" }, 
@@ -218,9 +218,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "gyroZ", offset: 4, size: 2, method: "Method_IMU_Gyro" }
     ],
 
-
-
-    //MEGASQUIRT
+    // MEGASQUIRT
     "05F0": [{ name: "rpm", offset: 6, size: 2 }],
     "05F2": [
         { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
@@ -244,8 +242,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
     "05F7": [
         { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
-        { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10   },
-        { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10 }
+        { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10, filter: true   },
+        { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10, filter: true }
     ],
     "061B": [
         { name: "sync-lossCounter",        offset: 0, size: 1 },
@@ -259,7 +257,9 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 // ==========================================
 
 export class CANDecoder {
-    filters: { [key: string]: KalmanFilter2D };
+    // Dynamic Filter Storage
+    filters: Record<string, KalmanFilter2D> = {}; 
+
     ACCEL_SENS: number;
     GYRO_SENS: number;
     
@@ -283,18 +283,6 @@ export class CANDecoder {
     lapCount: number = 0;
 
     constructor() {
-        const Q_Acc: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
-        const Q_Gyro: [[number, number], [number, number]] = [[1e-5, 0], [0, 1e-4]];
-
-        this.filters = {
-            accX: new KalmanFilter2D(Q_Acc, 1e-1),
-            accY: new KalmanFilter2D(Q_Acc, 1e-1),
-            accZ: new KalmanFilter2D(Q_Acc, 1e-1),
-            gyroX: new KalmanFilter2D(Q_Gyro, 1e-3),
-            gyroY: new KalmanFilter2D(Q_Gyro, 1e-3),
-            gyroZ: new KalmanFilter2D(Q_Gyro, 1e-3),
-        };
-
         this.ACCEL_SENS = 16384.0; 
         this.GYRO_SENS  = 131.0;   
         this.mainCoords = [0, 0];
@@ -305,51 +293,57 @@ export class CANDecoder {
             gyroX: [], gyroY: [], gyroZ: []
         };
         this.imuBias = {};
+        
+        // No manual filter initialization needed here anymore.
+        // They are created on-the-fly in applyKalman().
     }
 
-// 1. Add 'async' keyword so we can wait for it
-async setBaseCoordinates(trackData: any) {
-    // Check if the URL string exists
-    if (!trackData || !trackData.gates) {
-        console.warn("No gates file found in trackData");
-        return;
-    }
-
-    try {
-        // 2. Await the fetch
-        const data = await api.fetchJsonFile(trackData.gates);
-
-        // 3. Integrity Check: Ensure we have data
-        if (!Array.isArray(data) || data.length === 0) {
-            console.warn("Gates file downloaded but is empty or invalid.");
+    async setBaseCoordinates(trackData: any) {
+        if (!trackData) {
+            console.warn("No trackData provided to setBaseCoordinates");
             return;
         }
 
-        // 4. Safe Parsing (Handle strings/numbers and use Math.floor)
-        // usage of Number() ensures "12.3" string becomes 12.3 number
+        // 1. Handle Pre-parsed Gates (Array/Object from Dashboard)
+        if (trackData.gates && typeof trackData.gates === 'object') {
+            this.initializeGates(trackData.gates);
+        } 
+        // 2. Handle Gates URL String (Fallback)
+        else if (typeof trackData.gates === 'string') {
+            try {
+                const data = await api.fetchJsonFile(trackData.gates);
+                this.initializeGates(data);
+            } catch (err) {
+                console.warn("Failed to download Gates file:", err);
+            }
+        }
+    }
+
+    // Helper to actually build the gate objects
+    initializeGates(data: any) {
+        if (!Array.isArray(data) || data.length === 0) {
+            console.warn("Gates data is empty or invalid.");
+            return;
+        }
+
         const lat = Math.floor(Number(data[0].lat1)); 
         const lon = Math.floor(Number(data[0].lon1));
 
         this.mainCoords = [lat, lon];
+        this.gateCheckers = {}; // Clear old gates
 
         data.forEach((g: any) => {
-            // Validate that coordinates exist
             if (g.lat1 == null || g.lon1 == null || g.lat2 == null || g.lon2 == null) return;
 
             const gL = new GPSPoint(Number(g.lat1), Number(g.lon1), 0, 0);
             const gR = new GPSPoint(Number(g.lat2), Number(g.lon2), 0, 0);
             
-            // Check if name exists, otherwise generate one
             const gateName = g.name || `Gate_${Math.random().toString(36).substr(2, 5)}`;
             this.gateCheckers[gateName] = new GPS_Intersection(gL, gR);
         });
 
-        console.log(`Decoder Initialized: Base [${lat}, ${lon}], Gates: ${Object.keys(this.gateCheckers).join(', ')}`);
-        
-    } catch (err) {
-        console.warn("Failed to download or parse Gates file:", err);
+        console.log(`Decoder Initialized: Base [${lat}, ${lon}], Gates: ${Object.keys(this.gateCheckers).length}`);
     }
-}
 
     parse(rawString: string) {
         try {
@@ -376,29 +370,24 @@ async setBaseCoordinates(trackData: any) {
                     switch (sig.method) {
                         case "Convert_Temp":
                             const tempInF = rawVal / (sig.divide || 1); 
-                            const tempInC = (tempInF - 32) * 5 / 9;
-                            finalVal = tempInC;
+                            finalVal = (tempInF - 32) * 5 / 9;
                             break;
                         case "Method1": 
                             const low = rawVal & 0xFF;
                             const high = (rawVal >> 8) & 0xFF;
                             finalVal = low + (high * 100);
                             break;
-
                         case "Method2_Lat":
                             finalVal = this.convertMethod2(rawVal, 0);
                             break;
-
                         case "Method2_Lon":
                             finalVal = this.convertMethod2(rawVal, 1);
                             break;
-
                         case "Method_IMU_Acc":
                             finalVal = (rawVal / this.ACCEL_SENS) * 9.80665;
                             finalVal = this.handleImuBias(sig.name, finalVal);
                             finalVal = this.applyKalman(sig.name, finalVal, timestamp);
                             break;
-
                         case "Method_IMU_Gyro":
                             finalVal = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
                             finalVal = this.handleImuBias(sig.name, finalVal);
@@ -410,6 +399,11 @@ async setBaseCoordinates(trackData: any) {
                     const div = sig.divide ?? 1;
                     const add = sig.add ?? 0;
                     finalVal = (rawVal * mult / div) + add;
+                    
+                    // GENERIC FILTER CHECK
+                    if (sig.filter === true) {
+                        finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                    }
                 }
 
                 decodedValues[sig.name] = Number(finalVal.toFixed(6));
@@ -421,18 +415,17 @@ async setBaseCoordinates(trackData: any) {
                 const lon = decodedValues["GPS_Longitude"];
                 const speed = decodedValues["GPS_Speed"] || 0;
                 
-                // Create current point
                 this.currPos = new GPSPoint(lat, lon, timestamp, speed);
                 
                 if (this.prevPos) {
                     this.checkCross(timestamp, this.currPos);
                 }
                 
-                // Update history
                 this.prevPos = this.currPos;
             }
+            decodedValues["Distance"] = this.trackLen;
 
-            return { timestamp, canId, ...decodedValues };
+            return { timestamp, canId, ...decodedValues, Distance: this.trackLen };
 
         } catch (e) {
             return null;
@@ -466,22 +459,29 @@ async setBaseCoordinates(trackData: any) {
         return val;
     }
 
+    // --- NEW: LAZY LOADING APPLY KALMAN ---
     applyKalman(name: string, val: number, timestamp: number): number {
-        let filterKey = "";
-        if (name.includes("accelerationX")) filterKey = "accX";
-        if (name.includes("accelerationY")) filterKey = "accY";
-        if (name.includes("accelerationZ")) filterKey = "accZ";
-        if (name.includes("gyroX")) filterKey = "gyroX";
-        if (name.includes("gyroY")) filterKey = "gyroY";
-        if (name.includes("gyroZ")) filterKey = "gyroZ";
+        // If filter doesn't exist, create it on-the-fly
+        if (!this.filters[name]) {
+            console.log(`Decoder: Initializing new Kalman Filter for '${name}'`);
 
-        if (filterKey && this.filters[filterKey]) {
-            return this.filters[filterKey].filter(val, timestamp);
+            // Default Tuning
+            // IMU data usually needs high process noise (1e-3) and moderate sensor noise (1e-1)
+            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
+            let R = 0.5; // Generic default
+            
+            // Auto-detect IMU signals for specific tuning
+            if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
+                R = 0.1; // More trust in sensor for IMU
+            }
+
+            this.filters[name] = new KalmanFilter2D(Q, R);
         }
-        return val;
+
+        return this.filters[name].filter(val, timestamp);
     }
 
-    // --- LAP LOGIC (Ported from Python) ---
+    // --- LAP LOGIC ---
     checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
         const prev = this.prevPos;
@@ -495,26 +495,24 @@ async setBaseCoordinates(trackData: any) {
             if (s0.get_intersection_time()) {
                 const t0 = s0.get_time();
                 
-                // If we have an S2 (last sector), this closes the previous lap
+                // Lap Complete Logic
                 if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
-                    this.currentLap["S3"] = t0; // S3 is the finish time of current lap
+                    this.currentLap["S3"] = t0; 
                     this.currentLap["complete"] = true;
                     this.currentLap["dist"] = this.trackLen;
-                    this.currentLap["ts"] = t0; // Timestamp for indexing
-                    this.currentLap["lap"] = this.lapCount; // Lap number label
+                    this.currentLap["ts"] = t0; 
+                    this.currentLap["lap"] = this.lapCount; 
 
-                    // Save finished lap
                     this.lapsHistory.push({ ...this.currentLap });
                     console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
                     
-                    // Reset for New Lap
                     this.lapCount++;
                     this.currentLap = { "S0": t0 };
                     this.trackLen = 0;
                     this.gateIdx = 1;
                     this.justS0 = true;
                 } 
-                // First time crossing S0 (Start of Session)
+                // Session Start Logic
                 else if (t0 && !this.currentLap["S0"]) {
                     this.lapCount = 1;
                     this.currentLap = { "S0": t0 };
@@ -552,9 +550,7 @@ async setBaseCoordinates(trackData: any) {
         this.justS0 = false;
     }
 
-    // 2. NEW METHOD: Export Data for Frontend
     getGatesData() {
-        // Return exactly what the Dashboard expects: { timestamps: [], lap_data: [] }
         return {
             timestamps: this.lapsHistory.map(l => l.ts || 0),
             lap_data: this.lapsHistory

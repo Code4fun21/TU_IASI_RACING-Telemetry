@@ -11,7 +11,7 @@ export const MqttService = {
 
   
   setTrack: (trackData:Track) => {
-    console.log("Setting Track Gates for Decoder...");
+    console.log("Setting Track Gates for Decoder...",trackData);
     decoder.setBaseCoordinates(trackData);
   },
 
