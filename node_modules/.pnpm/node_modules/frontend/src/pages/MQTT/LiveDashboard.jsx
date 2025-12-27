@@ -7,6 +7,7 @@ import { transformToColumnar } from "../../services/DataTransformer";
 
 // Components
 import MapChart from "../../components/MapChart"; 
+import LapTimesPanel from "../MQTT/MoreCharts/Charts/LapTimesPanel"; // <--- 1. NEW IMPORT
 import TopActionBar from "./Components/TopActionBar"; 
 import MultiLineChart from "../../components/MultiLineChart"; 
 import RPMChart from "../../components/RPMChart";
@@ -106,6 +107,17 @@ export default function LiveDashboard() {
 
 
   // --- CHART DATA PREPARATION ---
+
+  // 1.1 NEW: Extract Laps from Buffer for Panel
+  const liveLaps = useMemo(() => {
+      // Look for the latest packet that contains "lap_data"
+      // We search from end to start to find the freshest update
+      const lapPacket = decodedBuffer.slice().reverse().find(p => p.lap_data);
+      if (lapPacket && Array.isArray(lapPacket.lap_data)) {
+          return lapPacket.lap_data;
+      }
+      return [];
+  }, [decodedBuffer]);
 
   // Generic Helper for Engine/Vital/Custom
   const processDataWithHold = (buffer, signalKeys, validator = null) => {
@@ -322,16 +334,15 @@ export default function LiveDashboard() {
         </div>
 
         {/* Standard Charts Row */}
-        
-            <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Engine Signals</h3>
-                {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataEngine} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
-            </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Engine Signals</h3>
+            {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataEngine} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
+        </div>
 
-            <div className="bg-white p-6 rounded-lg shadow">
-                <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Telemetry</h3>
-                {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataVital} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
-            </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Telemetry</h3>
+            {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataVital} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
+        </div>
         
 
         {/* GPS Chart */}
@@ -344,21 +355,40 @@ export default function LiveDashboard() {
             )}
         </div>
 
-        {/* Live Map */}
-        <div className="bg-white p-6 rounded-lg shadow h-[600px] relative">
-            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Map</h3>
-            {trackData ? (
-                <MapChart 
-                    geoData={trackData.coordinates} 
-                    data={mapData} 
-                    gates={gates}  
-                    height={500} 
-                    // rotation={-90} 
+        {/* --- 5. UPDATED LAYOUT: Live Map + Lap Times Panel --- */}
+        {/* Changed to 3 columns (2:1 ratio) and added min-h */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">
+            
+            {/* Live Map */}
+            {/* Added min-w-0 to prevent Grid blowout */}
+            <div className="bg-white p-4 rounded-lg shadow lg:col-span-2 relative flex flex-col min-w-0">
+                <h3 className="text-lg font-medium text-gray-900 text-center mb-2">Live Map</h3>
+                <div className="flex-grow relative border border-gray-100 rounded bg-gray-50 overflow-hidden">
+                    {trackData ? (
+                        <MapChart 
+                            geoData={trackData.coordinates} 
+                            data={mapData} 
+                            gates={gates}  
+                            width="100%"   
+                            height="100%"  
+                        />
+                    ) : (
+                        <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading Track Layout...</div>
+                    )}
+                </div>
+            </div>
+
+            {/* Lap Times Panel */}
+            <div className="bg-white rounded-lg shadow lg:col-span-1 flex flex-col overflow-hidden min-w-0">
+                <LapTimesPanel 
+                    laps={liveLaps} 
+                    title="Live Lap Times" 
+                    className="w-full h-full border-0 shadow-none" 
                 />
-            ) : (
-                <div className="flex items-center justify-center h-full text-gray-500 animate-pulse">Loading Track Layout...</div>
-            )}
-        </div>  
+            </div>
+            
+        </div>
+        {/* ------------------------------------------- */}
 
         {/* Gauges */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">

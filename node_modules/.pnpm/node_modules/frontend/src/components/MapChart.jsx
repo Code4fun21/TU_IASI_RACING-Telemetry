@@ -7,7 +7,7 @@ const MapChart = ({
   geoData,
   mapName = "TrackMap",
   data,
-  gates = [],
+  gates ,
   width = "100%",
   height = "100%",
   gatePointCount = 20,

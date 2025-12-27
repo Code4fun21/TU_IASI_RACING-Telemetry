@@ -1,40 +1,50 @@
-// src/middleware/usageGuard.ts
 import { Context, Next } from 'hono';
 
-// Free Tier Limits
+// Free Tier Limits (Source: Cloudflare Docs)
 const LIMITS = {
-  D1_WRITES_DAILY: 100000,
-  R2_UPLOADS_MONTHLY: 1000000 
+  D1_WRITES_DAILY: 100000,       //
+  D1_READS_DAILY: 5000000,       //
+  R2_UPLOADS_MONTHLY: 1000000,   // Class A Operations
+  R2_DOWNLOADS_MONTHLY: 10000000 // Class B Operations
 };
 
-export const usageGuardMiddleware = (type: 'd1_writes' | 'r2_uploads') => {
+type LimitType = 'd1_writes' | 'd1_reads' | 'r2_uploads' | 'r2_downloads';
+
+export const usageGuardMiddleware = (type: LimitType) => {
   return async (c: Context, next: Next) => {
     const db = c.env.DB;
 
     // 1. CHECK: Can we proceed?
-    // 1. CHECK: Can we proceed?
     const result = await db.prepare(
       "SELECT count, last_reset FROM system_limits WHERE id = ?"
     ).bind(type).first() as { count: number, last_reset: string } | null;
-    
+
     if (result) {
       const now = new Date();
       const lastReset = new Date(result.last_reset);
       let shouldReset = false;
 
-      // Reset Logic
-      if (type === 'd1_writes') {
+      // Logic: D1 is Daily, R2 is Monthly
+      if (type.startsWith('d1')) {
         shouldReset = now.toISOString().split('T')[0] !== result.last_reset; // New Day
       } else {
         shouldReset = now.getMonth() !== lastReset.getMonth(); // New Month
       }
 
       if (!shouldReset) {
-        const limit = type === 'd1_writes' ? LIMITS.D1_WRITES_DAILY : LIMITS.R2_UPLOADS_MONTHLY;
+        // Determine which limit to check against
+        let limit = 0;
+        switch (type) {
+            case 'd1_writes': limit = LIMITS.D1_WRITES_DAILY; break;
+            case 'd1_reads': limit = LIMITS.D1_READS_DAILY; break;
+            case 'r2_uploads': limit = LIMITS.R2_UPLOADS_MONTHLY; break;
+            case 'r2_downloads': limit = LIMITS.R2_DOWNLOADS_MONTHLY; break;
+        }
+
         if (result.count >= limit) {
           return c.json({ 
             error: "System Overload", 
-            message: `Daily/Monthly limit reached for ${type}. Try again later.` 
+            message: `Limit reached for ${type}. Please try again later.` 
           }, 429);
         }
       }
@@ -43,8 +53,7 @@ export const usageGuardMiddleware = (type: 'd1_writes' | 'r2_uploads') => {
     // 2. PROCEED: Run the actual route handler
     await next();
 
-    // 3. INCREMENT: Update counter in background (after response is sent)
-    // We use c.executionCtx.waitUntil so the user doesn't wait for this DB write
+    // 3. INCREMENT: Update counter in background
     const nowStr = new Date().toISOString().split('T')[0];
     const promise = db.prepare(`
         UPDATE system_limits 

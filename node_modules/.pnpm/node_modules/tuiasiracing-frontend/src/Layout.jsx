@@ -1,25 +1,17 @@
 import { useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { Dialog, DialogBackdrop, DialogPanel, TransitionChild } from "@headlessui/react";
 import {
     Bars3Icon,
-    CalendarIcon,
-    ChartPieIcon,
-    DocumentDuplicateIcon,
-    FolderIcon,
     HomeIcon,
-    UsersIcon,
     XMarkIcon,
     AdjustmentsHorizontalIcon,
 } from "@heroicons/react/24/outline";
 import logo from "./assets/logo-white.png";
-import { useLocation } from "react-router-dom";
 
 const navigationOnline = [
     { name: "Drivers and Monoposts", href: "/data-input", icon: AdjustmentsHorizontalIcon, current: true },
     { name: "Dashboard", href: "/live-dashboard", icon: HomeIcon, current: false },
-    { name: "Offline data", href: "/offline-data", icon: UsersIcon, current: false },
-    // { name: "Longer charts", href: "/longer-charts", icon: UsersIcon, current: false },
 ];
 
 function classNames(...classes) {
@@ -34,9 +26,11 @@ export default function Layout() {
         ...item,
         current: location.pathname.includes(item.href),
     }));
+
     return (
         <>
             <div className="bg-gray-900">
+                {/* Mobile sidebar (Dialog) - Unchanged */}
                 <Dialog open={sidebarOpen} onClose={setSidebarOpen} className="relative z-50 lg:hidden">
                     <DialogBackdrop
                         transition
@@ -60,7 +54,6 @@ export default function Layout() {
                                     </button>
                                 </div>
                             </TransitionChild>
-                            {/* Sidebar component, swap this element with another sidebar if you like */}
                             <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-red-700 px-6 pb-2">
                                 <div className="flex h-16 shrink-0 items-center">
                                     <img alt="Your Company" src={logo} className="h-8 w-auto" />
@@ -102,9 +95,8 @@ export default function Layout() {
                     </div>
                 </Dialog>
 
-                {/* Static sidebar for desktop */}
-                <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-72 lg:flex-col">
-                    {/* Sidebar component, swap this element with another sidebar if you like */}
+                {/* --- 1. CHANGED: Desktop Sidebar Width (w-72 -> w-64) --- */}
+                <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-64 lg:flex-col">
                     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-red-700 px-6">
                         <div className="flex h-16 shrink-0 items-center">
                             <img alt="Your Company" src={logo} className="h-8 w-auto" />
@@ -164,7 +156,8 @@ export default function Layout() {
                     </a>
                 </div>
 
-                <main className="py-10 lg:pl-72">
+                {/* --- 2. CHANGED: Main Content Padding (pl-72 -> pl-64) --- */}
+                <main className="py-10 lg:pl-64">
                     <div className="px-4 sm:px-6 lg:px-8">
                         <Outlet />
                     </div>

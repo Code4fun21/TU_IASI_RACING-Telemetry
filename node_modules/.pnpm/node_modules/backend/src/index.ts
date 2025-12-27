@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { SessionSchema, DriverSchema, MonopostSchema, TrackSchema, TimestampSchema } from '@telemetry/shared'; // Ensure all schemas are imported
+import { SessionSchema, DriverSchema, MonopostSchema, TrackSchema, TimestampSchema } from '@telemetry/shared'; 
+import { usageGuardMiddleware } from './middleware/usageGuard';
 
 // Define the bindings
 type Bindings = {
@@ -10,326 +11,223 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// 1. Enable CORS
+// Enable CORS
 app.use('/*', cors());
 
-// --- FILE UPLOAD (R2) ---
-app.post('/api/upload', async (c) => {
-  const body = await c.req.parseBody();
-  const file = body['file'];
-  
-  if (!file || !(file instanceof File)) {
-    return c.json({ error: 'No file uploaded' }, 400);
-  }
 
-  const fileName = `${file.name}`;
-  await c.env.BUCKET.put(fileName, file.stream());
+// --- R2 ROUTES (Storage) ---
 
-  return c.json({ success: true, fileName: fileName });
-});
-
-// --- FILE DOWNLOAD (R2) ---
-app.get('/api/download/:filename', async (c) => {
-  const filename = c.req.param('filename');
-  const object = await c.env.BUCKET.get(filename);
-
-  if (object === null) {
-    return c.text('File not found', 404);
-  }
-
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
-
-  return new Response(object.body, { headers });
-});
-
-
-// --- SESSION METADATA (D1) ---
-
-// GET /api/sessions (All Sessions) - ✅ Existing Route
-app.get('/api/sessions', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM Session ORDER BY date DESC, time DESC'
-  ).all();
-  return c.json(results);
-});
-
-// GET /api/sessions/:id (Single Session) - ❌ NEW
-app.get('/api/sessions/:id', async (c) => {
-  const id = c.req.param('id');
-  const { results } = await c.env.DB.prepare(
-    'SELECT * FROM Session WHERE id = ?'
-  ).bind(id).all();
-  
-  if (!results || results.length === 0) {
-    return c.json({ error: 'Session not found' }, 404);
-  }
-  return c.json(results[0]);
-});
-
-// POST /api/sessions (Create Session) - ✅ Existing Route
-app.post('/api/sessions', async (c) => {
-  const body = await c.req.json();
-  const result = SessionSchema.safeParse(body);
-  console.log(body,result)
-  if (!result.success) {
-    return c.json({ error: result.error }, 400);
-  }
-
-  const session = result.data;
-
-  
-  const info = await c.env.DB.prepare(`
-            INSERT INTO Session (csvFileName, decodedFileName, trackId, date, time)
-            VALUES (?, ?, ?, ?, ?)
-        `).bind(
-            session.csvFileName,
-            session.decodedFileName, 
-            session.trackId,
-            session.date,
-            session.time
-        ).run();
-
-  return c.json({ success: true, id: info.meta.last_row_id });
-});
-
-// DELETE /api/sessions/:id - ❌ NEW
-app.delete('/api/tracks/:id', async (c) => {
-  const id = c.req.param('id');
-  
-  try {
-    await c.env.DB.prepare('DELETE FROM Track WHERE id=?').bind(id).run();
-    return c.json({ success: true });
-
-  } catch (e: any) {
-    // Catch Foreign Key Constraint Error
-    if (e.message.includes('FOREIGN KEY') || e.message.includes('SQLITE_CONSTRAINT')) {
-      return c.json({ 
-        error: "Cannot delete this Track because it is used in recorded Sessions. Please delete the Sessions first." 
-      }, 409); // 409 Conflict
-    }
+// UPLOAD (Class A Op)
+app.post('/api/upload', 
+  usageGuardMiddleware('r2_uploads'), 
+  async (c) => {
+    const body = await c.req.parseBody();
+    const file = body['file'];
     
-    // Other errors
-    console.error(e);
-    return c.json({ error: "Internal Server Error" }, 500);
+    if (!file || !(file instanceof File)) {
+      return c.json({ error: 'No file uploaded' }, 400);
+    }
+    const fileName = `${file.name}`;
+    await c.env.BUCKET.put(fileName, file.stream());
+    return c.json({ success: true, fileName: fileName });
   }
-});
+);
 
-// --- DRIVER METADATA (D1) ---
+// DOWNLOAD (Class B Op)
+app.get('/api/download/:filename', 
+  usageGuardMiddleware('r2_downloads'), // <--- NEW PROTECTION
+  async (c) => {
+    const filename = c.req.param('filename');
+    const object = await c.env.BUCKET.get(filename);
 
-// GET /api/drivers - ❌ NEW
-app.get('/api/drivers', async (c) => {
+    if (object === null) return c.text('File not found', 404);
+
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('etag', object.httpEtag);
+
+    return new Response(object.body, { headers });
+  }
+);
+
+
+// --- D1 ROUTES (Database) ---
+
+// 1. SESSIONS
+app.get('/api/sessions', 
+  usageGuardMiddleware('d1_reads'), // <--- PROTECT READ
+  async (c) => {
+    const { results } = await c.env.DB.prepare('SELECT * FROM Session ORDER BY date DESC, time DESC').all();
+    return c.json(results);
+  }
+);
+
+app.get('/api/sessions/:id', 
+  usageGuardMiddleware('d1_reads'), // <--- PROTECT READ
+  async (c) => {
+    const id = c.req.param('id');
+    const { results } = await c.env.DB.prepare('SELECT * FROM Session WHERE id = ?').bind(id).all();
+    if (!results || results.length === 0) return c.json({ error: 'Session not found' }, 404);
+    return c.json(results[0]);
+  }
+);
+
+app.post('/api/sessions', 
+  usageGuardMiddleware('d1_writes'), // <--- PROTECT WRITE
+  async (c) => {
+    const body = await c.req.json();
+    const result = SessionSchema.safeParse(body);
+    if (!result.success) return c.json({ error: result.error }, 400);
+
+    const session = result.data;
+    const info = await c.env.DB.prepare(`
+        INSERT INTO Session (csvFileName, decodedFileName, trackId, date, time)
+        VALUES (?, ?, ?, ?, ?)
+    `).bind(session.csvFileName, session.decodedFileName, session.trackId, session.date, session.time).run();
+
+    return c.json({ success: true, id: info.meta.last_row_id });
+  }
+);
+
+// 2. DRIVERS
+app.get('/api/drivers', usageGuardMiddleware('d1_reads'), async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM Driver').all();
   return c.json(results);
 });
 
-//GET /api/drivers/:id (Single driver)
-app.get('/api/drivers/:id',async (c)=>{
-  const id=c.req.param("id");
-  const {results} = await c.env.DB.prepare(
-    'SELECT * FROM Driver WHERE id=?'
-  ).bind().all();
-
-  if(!results || results.length === 0) return c.json({error:'Driver not found'},404);
+app.get('/api/drivers/:id', usageGuardMiddleware('d1_reads'), async (c) => {
+  const id = c.req.param("id");
+  const { results } = await c.env.DB.prepare('SELECT * FROM Driver WHERE id=?').bind(id).all();
+  if (!results || results.length === 0) return c.json({ error: 'Driver not found' }, 404);
   return c.json(results[0]);
-})
+});
 
-// POST /api/drivers - ❌ NEW
-app.post('/api/drivers', async (c) => {
+app.post('/api/drivers', usageGuardMiddleware('d1_writes'), async (c) => {
   const body = await c.req.json();
   const result = DriverSchema.safeParse(body);
   if (!result.success) return c.json({ error: result.error }, 400);
-console.log(body,result)
   const driver = result.data;
-  await c.env.DB.prepare(
-    'INSERT INTO Driver (name, weight, other) VALUES (?, ?, ?)'
-  ).bind(driver.name, driver.weight, driver.other).run();
-
+  await c.env.DB.prepare('INSERT INTO Driver (name, weight, other) VALUES (?, ?, ?)').bind(driver.name, driver.weight, driver.other).run();
   return c.json({ success: true });
 });
 
-//PUT app/drivers/:id
-app.put('/api/drivers/:id', async (c) => {
+app.put('/api/drivers/:id', usageGuardMiddleware('d1_writes'), async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();
-  
-  // Validate schema if needed (DriverSchema)
-  
-  await c.env.DB.prepare(`
-    UPDATE Driver 
-    SET name = ?, weight = ?, other = ?
-    WHERE id = ?
-  `).bind(body.name, body.weight, body.other, id).run();
-
+  await c.env.DB.prepare('UPDATE Driver SET name = ?, weight = ?, other = ? WHERE id = ?').bind(body.name, body.weight, body.other, id).run();
   return c.json({ success: true });
 });
 
-//DELETE app/drivers/:id
-app.delete('app/drivers/:id',async (c) => {
-  const id=c.req.param('id');
+app.delete('/api/drivers/:id', usageGuardMiddleware('d1_writes'), async (c) => {
+  const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM Driver WHERE id = ?').bind(id).run();
-
   return c.json({ success: true });
 });
 
-// --- TRACK METADATA (D1) ---
 
-//POST /api/tracks
-app.post('/api/tracks', async (c)=>{
-  const body = await c.req.json();
-  const result=TrackSchema.safeParse(body);
-  if(!result.success) return c.json({error:result.error})
-  const track = result.data;
-  await c.env.DB.prepare(
-    'INSERT INTO Track (name, gates, coordinates) VALUES (?, ?, ?)'
-  ).bind(
-    track.name,
-    track.gates,
-    track.coordinates
-  ).run();
-
-  return c.json({ success: true });
-});
-
-// GET /api/tracks - ❌ NEW
-app.get('/api/tracks', async (c) => {
+// 3. TRACKS
+app.get('/api/tracks', usageGuardMiddleware('d1_reads'), async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM Track').all();
   return c.json(results);
 });
 
-//GET /api/tracks/:id
-app.get('/api/tracks/:id', async (c)=>{
-  const id=c.req.param('id');
-  const {results}= await c.env.DB.prepare(
-    'SELECT * FROM Track WHERE id = ?'
-  ).bind(id).all();
-
-  if(!results||results.length===0) return c.json({error:"Driver not found"},404);
+app.get('/api/tracks/:id', usageGuardMiddleware('d1_reads'), async (c) => {
+  const id = c.req.param('id');
+  const { results } = await c.env.DB.prepare('SELECT * FROM Track WHERE id = ?').bind(id).all();
+  if (!results || results.length === 0) return c.json({ error: "Track not found" }, 404);
   return c.json(results[0]);
-})
-
-//DELETE /api/tracks/:id
-app.delete('/api/tracks/:id',async (c)=>{
-  const id=c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM Track WHERE id=?').bind(id).run();
-
-  return c.json({success: true});
 });
 
-// --- MONOPOST METADATA (D1) ---
-
-// POST /api/monoposts - ❌ NEW
-app.post('/api/monoposts', async (c) => {
+app.post('/api/tracks', usageGuardMiddleware('d1_writes'), async (c) => {
   const body = await c.req.json();
-  const result = MonopostSchema.safeParse(body);
-  if (!result.success) return c.json({ error: result.error }, 400);
-  
-  const monopost = result.data;
-  await c.env.DB.prepare(
-    'INSERT INTO Monopost (details, tires, other) VALUES (?, ?, ?)'
-  ).bind(monopost.details,monopost.tires,monopost.other).run();
-
+  const result = TrackSchema.safeParse(body);
+  if (!result.success) return c.json({ error: result.error });
+  const track = result.data;
+  await c.env.DB.prepare('INSERT INTO Track (name, gates, coordinates) VALUES (?, ?, ?)').bind(track.name, track.gates, track.coordinates).run();
   return c.json({ success: true });
 });
-// GET /api/monoposts
-app.get('/api/monoposts', async (c) => {
+
+app.delete('/api/tracks/:id', usageGuardMiddleware('d1_writes'), async (c) => {
+  const id = c.req.param('id');
+  try {
+    await c.env.DB.prepare('DELETE FROM Track WHERE id=?').bind(id).run();
+    return c.json({ success: true });
+  } catch (e: any) {
+    if (e.message.includes('FOREIGN KEY') || e.message.includes('SQLITE_CONSTRAINT')) {
+      return c.json({ error: "Cannot delete this Track because it is used in recorded Sessions." }, 409);
+    }
+    return c.json({ error: "Internal Server Error" }, 500);
+  }
+});
+
+
+// 4. MONOPOSTS
+app.get('/api/monoposts', usageGuardMiddleware('d1_reads'), async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM Monopost').all();
   return c.json(results);
 });
 
-// GET /api/monoposts/:id
-app.get('/api/monoposts/:id', async (c) =>{
+app.get('/api/monoposts/:id', usageGuardMiddleware('d1_reads'), async (c) => {
   const id = c.req.param('id');
-  const {results}=  await c.env.DB.prepare('SELECT * FROM Monopost WHERE id = ?').bind(id).all();
-  if(!results ||results.length===0 ){
-    return c.json({error: 'Monopost not found'},404);
-  }
+  const { results } = await c.env.DB.prepare('SELECT * FROM Monopost WHERE id = ?').bind(id).all();
+  if (!results || results.length === 0) return c.json({ error: 'Monopost not found' }, 404);
   return c.json(results);
 });
 
-// PUT/api/monoposts/:id
-app.put('/api/monoposts/:id', async (c) => {
-  const id = c.req.param('id');
+app.post('/api/monoposts', usageGuardMiddleware('d1_writes'), async (c) => {
   const body = await c.req.json();
-
-  await c.env.DB.prepare(`
-    UPDATE Monopost 
-    SET details = ?, tires = ?, other = ?
-    WHERE id = ?
-  `).bind(body.details, body.tires, body.other, id).run();
-
+  const result = MonopostSchema.safeParse(body);
+  if (!result.success) return c.json({ error: result.error }, 400);
+  const monopost = result.data;
+  await c.env.DB.prepare('INSERT INTO Monopost (details, tires, other) VALUES (?, ?, ?)').bind(monopost.details, monopost.tires, monopost.other).run();
   return c.json({ success: true });
 });
 
-//DELETE /api/monoposts/:id
-app.delete('/api/monoposts/:id', async (c)=>{
-  const id=c.req.param('id');
-  await c.env.DB.prepare('DELETE FROM Monopost WHERE id=?').bind(id).run();
-  
-  return c.json({success: true});
-})
-
-
-// --- TIMESTAMP METADATA (D1) ---
-
-//POST /api/timestamps
-app.post('/api/timestamps', async (c)=>{
-  const body=await c.req.json();
-  const result= TimestampSchema.safeParse(body);
-  
-  if(!result.success) return c.json({error: result.error},404);
-  const timestamp=result.data;
-  await c.env.DB.prepare(
-    'INSERT INTO Timestamp (startTime, endTime, driverId, monopostId, sessionId) VALUES(?, ?, ?, ?, ?)'
-  ).bind(
-    timestamp.startTime,
-    timestamp.endTime,
-    timestamp.driverId,
-    timestamp.monopostId,
-    timestamp.sessionId
-  ).run();
-return c.json({ success: true });
+app.put('/api/monoposts/:id', usageGuardMiddleware('d1_writes'), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  await c.env.DB.prepare('UPDATE Monopost SET details = ?, tires = ?, other = ? WHERE id = ?').bind(body.details, body.tires, body.other, id).run();
+  return c.json({ success: true });
 });
 
-// GET /api/timestamps/filters
-app.get('/api/timestamps/filters', async (c) => {
+app.delete('/api/monoposts/:id', usageGuardMiddleware('d1_writes'), async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM Monopost WHERE id=?').bind(id).run();
+  return c.json({ success: true });
+});
+
+
+// 5. TIMESTAMPS
+app.post('/api/timestamps', usageGuardMiddleware('d1_writes'), async (c) => {
+  const body = await c.req.json();
+  const result = TimestampSchema.safeParse(body);
+  if (!result.success) return c.json({ error: result.error }, 404);
+  const timestamp = result.data;
+  await c.env.DB.prepare('INSERT INTO Timestamp (startTime, endTime, driverId, monopostId, sessionId) VALUES(?, ?, ?, ?, ?)').bind(timestamp.startTime, timestamp.endTime, timestamp.driverId, timestamp.monopostId, timestamp.sessionId).run();
+  return c.json({ success: true });
+});
+
+app.get('/api/timestamps/filters', usageGuardMiddleware('d1_reads'), async (c) => {
   const column = c.req.query('column');
   const value = c.req.query('value');
   const validColumns = ['startTime', 'endTime', 'driverId', 'monopostId', 'sessionId'];
-    
-  if (!column || !validColumns.includes(column)) {
-      return c.json({ error: 'Invalid or missing column parameter.' }, 400);
-  }
   
-  const { results } = await c.env.DB.prepare(
-    `SELECT * FROM Timestamp WHERE ${column} = ?`
-  ).bind(value).all();
-
-  // FIX: Return empty array [] instead of 404 error
-  if (!results || results.length === 0) {
-      return c.json([]); 
-  }
-
+  if (!column || !validColumns.includes(column)) return c.json({ error: 'Invalid or missing column parameter.' }, 400);
+  
+  const { results } = await c.env.DB.prepare(`SELECT * FROM Timestamp WHERE ${column} = ?`).bind(value).all();
+  if (!results || results.length === 0) return c.json([]); 
   return c.json(results);
 });
 
-//DELETE /api/timestamps/filter
-app.delete('/api/timestamps/filters', async (c)=>{
-  const all=c.req.query('all');
-  const id=c.req.query('id');
-
-  if(all==="true")
-    await c.env.DB.prepare(
-    `DELETE FROM Timestamp WHERE sessionId=?`
-    ).bind(id).run();
-  else
-    await c.env.DB.prepare(
-  'DELETE FROM Timestamp WHERE id=?'
-).bind(id).run();
-  
-
-  
+app.delete('/api/timestamps/filters', usageGuardMiddleware('d1_writes'), async (c) => {
+  const all = c.req.query('all');
+  const id = c.req.query('id');
+  if (all === "true") {
+    await c.env.DB.prepare(`DELETE FROM Timestamp WHERE sessionId=?`).bind(id).run();
+  } else {
+    await c.env.DB.prepare('DELETE FROM Timestamp WHERE id=?').bind(id).run();
+  }
+  return c.json({ success: true });
 });
 
 export default app;

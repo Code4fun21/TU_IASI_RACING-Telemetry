@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { api } from '../services/api'; 
-// 1. Import the RaceTrackSelect component
 import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
+import MapChart from "../components/MapChart"; // Import Map for Preview
 
 export default function UploadPage() {
   const navigate = useNavigate();
@@ -15,8 +15,6 @@ export default function UploadPage() {
   // --- SESSION STATE ---
   const [sessionFile, setSessionFile] = useState<File | null>(null);
   const [plotData, setPlotData] = useState<any[]>([]);
-  
-  // We still keep trackId state, but it gets updated by the dropdown now
   const [trackId, setTrackId] = useState("1"); 
 
   // --- TRACK STATE ---
@@ -24,14 +22,17 @@ export default function UploadPage() {
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
   const [gatesFile, setGatesFile] = useState<File | null>(null);
 
+  // --- PREVIEW & EDIT STATE ---
+  const [previewLayout, setPreviewLayout] = useState<any>(null);
+  const [previewGates, setPreviewGates] = useState<any[]>([]);
+  const [newGate, setNewGate] = useState({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+
   // ==========================
   // 1. SESSION LOGIC
   // ==========================
   
-  // 2. Define the handler for the dropdown
   const onRaceTrackChange = (track: any) => {
     if (track && track.id) {
-        console.log("Selected Track:", track.name, "ID:", track.id);
         setTrackId(String(track.id));
     }
   };
@@ -41,7 +42,6 @@ export default function UploadPage() {
     if (!selectedFile) return;
     setSessionFile(selectedFile);
 
-    // Preview
     Papa.parse(selectedFile, {
       header: true,
       dynamicTyping: true,
@@ -56,12 +56,12 @@ export default function UploadPage() {
     const timestamp = String(unixTimestamp).length === 10 ? unixTimestamp * 1000 : unixTimestamp;
     const dateObj = new Date(timestamp);
     return {
-      date: dateObj.toLocaleDateString('en-CA'), // YYYY-MM-DD
-      time: dateObj.toLocaleTimeString('en-GB', { hour12: false }) // HH:MM:SS
+      date: dateObj.toLocaleDateString('en-CA'),
+      time: dateObj.toLocaleTimeString('en-GB', { hour12: false }) 
     };
   };
 
-const handleSaveSession = async () => {
+  const handleSaveSession = async () => {
     if (!sessionFile) return;
     setUploading(true);
 
@@ -71,7 +71,7 @@ const handleSaveSession = async () => {
 
       const sessionMeta = {
         csvFileName: storedFileName,
-        decodedFileName:`${storedFileName}-decoded.json`,
+        decodedFileName: `${storedFileName.replace('.csv', '')}_decoded.json`, // Pre-fill expectation
         trackId: Number(trackId),
         date: dateTime.date,
         time: dateTime.time,
@@ -91,7 +91,7 @@ const handleSaveSession = async () => {
   };
 
   // ==========================
-  // 2. TRACK LOGIC & VALIDATION
+  // 2. TRACK LOGIC & PREVIEW
   // ==========================
   
   const readJsonFile = (file: File): Promise<any> => {
@@ -110,52 +110,79 @@ const handleSaveSession = async () => {
     });
   };
 
-  const validateGates = (data: any) => {
-    if (!Array.isArray(data)) {
-      throw new Error("Gates file must be an Array of gate objects.");
-    }
-    if (data.length === 0) {
-      throw new Error("Gates file is empty.");
-    }
-    const sample = data[0];
-    const requiredKeys = ["name", "lat1", "lon1", "lat2", "lon2"];
-    for (const key of requiredKeys) {
-      if (!(key in sample)) {
-        throw new Error(`Invalid Gates format. Missing key: '${key}' in first item.`);
+  // Immediate Preview for Layout
+  const handleLayoutFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setLayoutFile(file);
+      try {
+          const json = await readJsonFile(file);
+          if (json.type !== "FeatureCollection") throw new Error("Invalid GeoJSON FeatureCollection");
+          setPreviewLayout(json);
+      } catch (err: any) {
+          alert("Error parsing layout: " + err.message);
+          setPreviewLayout(null);
       }
-    }
   };
 
-  const validateLayout = (data: any) => {
-    if (typeof data !== 'object' || data === null) {
-      throw new Error("Layout file must be a JSON Object.");
-    }
-    if (data.type !== "FeatureCollection") {
-      throw new Error("Layout file must be a GeoJSON 'FeatureCollection'.");
-    }
-    if (!Array.isArray(data.features)) {
-      throw new Error("Layout file is missing the 'features' array.");
-    }
+  // Immediate Preview for Gates
+  const handleGatesFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setGatesFile(file);
+      try {
+          const json = await readJsonFile(file);
+          if (!Array.isArray(json)) throw new Error("Gates must be an array");
+          setPreviewGates(json);
+      } catch (err: any) {
+          alert("Error parsing gates: " + err.message);
+          setPreviewGates([]);
+      }
+  };
+
+  // Gate Editing
+  const handleAddGate = (e: React.MouseEvent) => {
+      e.preventDefault();
+      const gate = {
+          name: newGate.name || `S${previewGates.length}`,
+          lat1: Number(newGate.lat1),
+          lon1: Number(newGate.lon1),
+          lat2: Number(newGate.lat2),
+          lon2: Number(newGate.lon2),
+      };
+      if (isNaN(gate.lat1) || isNaN(gate.lon1) || isNaN(gate.lat2) || isNaN(gate.lon2)) {
+          alert("Invalid coordinates");
+          return;
+      }
+      setPreviewGates([...previewGates, gate]);
+      setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+  };
+
+  const handleDeleteGate = (index: number) => {
+      const updated = previewGates.filter((_, i) => i !== index);
+      setPreviewGates(updated);
   };
 
   const handleSaveTrack = async () => {
-    if (!trackName || !layoutFile || !gatesFile) {
-      alert("Please fill in all track fields.");
+    if (!trackName || !previewLayout) {
+      alert("Track Name and Layout are required.");
       return;
     }
     setUploading(true);
 
     try {
-      const layoutJson = await readJsonFile(layoutFile);
-      const gatesJson = await readJsonFile(gatesFile);
+      // 1. Convert Current State to Files (Capture Edits)
+      const layoutBlob = new Blob([JSON.stringify(previewLayout)], { type: "application/json" });
+      const gatesBlob = new Blob([JSON.stringify(previewGates)], { type: "application/json" });
+      
+      const finalLayoutFile = new File([layoutBlob], layoutFile ? layoutFile.name : `${trackName}_layout.json`);
+      const finalGatesFile = new File([gatesBlob], gatesFile ? gatesFile.name : `${trackName}_gates.json`);
 
-      validateLayout(layoutJson);
-      validateGates(gatesJson);
+      // 2. Upload to R2
+      const storedLayoutName = await api.uploadFile(finalLayoutFile);
+      const storedGatesName = await api.uploadFile(finalGatesFile);
 
-      // Upload files first
-      const storedLayoutName = await api.uploadFile(layoutFile);
-      const storedGatesName = await api.uploadFile(gatesFile);
-
+      // 3. Save Metadata
       await api.saveTrack({
         name: trackName,
         gates: storedGatesName,
@@ -166,6 +193,8 @@ const handleSaveSession = async () => {
       setTrackName("");
       setLayoutFile(null);
       setGatesFile(null);
+      setPreviewLayout(null);
+      setPreviewGates([]);
 
     } catch (error: any) {
       console.error(error);
@@ -179,8 +208,8 @@ const handleSaveSession = async () => {
   // RENDER
   // ==========================
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-900 text-white p-6">
-      <div className="max-w-3xl w-full bg-gray-800 rounded-lg shadow-2xl overflow-hidden border border-gray-700">
+    <div className="flex min-h-screen justify-center bg-gray-900 text-white p-6">
+      <div className="max-w-6xl w-full bg-gray-800 rounded-lg shadow-2xl overflow-hidden border border-gray-700 flex flex-col">
         
         {/* Header Tabs */}
         <div className="flex border-b border-gray-700">
@@ -202,18 +231,17 @@ const handleSaveSession = async () => {
                 : 'bg-gray-900 text-gray-400 hover:text-white'
             }`}
           >
-            Add New Track
+            Add / Edit Track
           </button>
         </div>
 
-        <div className="p-8">
+        <div className="p-8 flex-grow">
           
           {/* --- SESSION FORM --- */}
           {activeTab === 'session' && (
-            <div className="space-y-6">
+            <div className="space-y-6 max-w-xl mx-auto">
               <h2 className="text-xl font-semibold mb-4 text-center">Add New Telemetry File</h2>
               
-              {/* File Input */}
               <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
                 <label className="block text-sm font-medium mb-2 text-gray-300">Select CSV File</label>
                 <input 
@@ -231,7 +259,6 @@ const handleSaveSession = async () => {
                 </div>
               )}
 
-              {/* 3. Replaced Manual Input with Dropdown */}
               <div>
                    <label htmlFor="race-track" className="block text-sm font-medium mb-2 text-gray-300">
                        Race Track
@@ -246,42 +273,110 @@ const handleSaveSession = async () => {
             </div>
           )}
 
-          {/* --- TRACK FORM --- */}
+          {/* --- TRACK FORM WITH PREVIEW --- */}
           {activeTab === 'track' && (
-            <div className="space-y-6">
-              <h2 className="text-xl font-semibold mb-4 text-center">Register New Track Layout</h2>
-              <div>
-                <label className="block text-sm font-medium mb-2 text-gray-300">Track Name</label>
-                <input 
-                  type="text" 
-                  value={trackName}
-                  onChange={e => setTrackName(e.target.value)}
-                  placeholder="e.g. Silverstone"
-                  className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:border-red-500 focus:outline-none"
-                />
-              </div>
-              <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                <label className="block text-sm font-medium mb-2 text-gray-300">Track Layout (GeoJSON)</label>
-                <input 
-                  type="file" 
-                  accept=".json,.geojson"
-                  onChange={(e) => setLayoutFile(e.target.files?.[0] || null)}
-                  className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
-                />
-              </div>
-              <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                <label className="block text-sm font-medium mb-2 text-gray-300">Gates Data (JSON)</label>
-                <input 
-                  type="file" 
-                  accept=".json"
-                  onChange={(e) => setGatesFile(e.target.files?.[0] || null)}
-                  className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-500 cursor-pointer"
-                />
-              </div>
-              <div className="flex gap-4 mt-6">
-                <button onClick={() => navigate('/')} className="flex-1 py-3 px-4 bg-gray-700 hover:bg-gray-600 rounded font-bold transition-colors">Cancel</button>
-                <button onClick={handleSaveTrack} disabled={!trackName || !layoutFile || !gatesFile || uploading} className="flex-1 py-3 px-4 bg-red-600 hover:bg-red-500 rounded font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{uploading ? 'Saving...' : 'Save Track'}</button>
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full">
+               
+               {/* Left Column: Editor */}
+               <div className="space-y-6 overflow-y-auto pr-2">
+                  <h2 className="text-xl font-semibold mb-4">Track Configuration</h2>
+                  
+                  <div>
+                    <label className="block text-sm font-medium mb-2 text-gray-300">Track Name</label>
+                    <input 
+                      type="text" 
+                      value={trackName}
+                      onChange={e => setTrackName(e.target.value)}
+                      placeholder="e.g. Silverstone"
+                      className="w-full bg-gray-700 border border-gray-600 rounded p-2 text-white focus:border-red-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                    <label className="block text-sm font-medium mb-2 text-gray-300">Track Layout (GeoJSON)</label>
+                    <input 
+                      type="file" 
+                      accept=".json,.geojson"
+                      onChange={handleLayoutFileChange}
+                      className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                    <label className="block text-sm font-medium mb-2 text-gray-300">Gates Data (JSON)</label>
+                    <input 
+                      type="file" 
+                      accept=".json"
+                      onChange={handleGatesFileChange}
+                      className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-green-600 file:text-white hover:file:bg-green-500 cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Gate List Editor */}
+                  <div className="bg-gray-700/30 p-4 rounded-lg border border-gray-600">
+                      <h3 className="font-medium text-gray-300 mb-2">Gates ({previewGates.length})</h3>
+                      <div className="max-h-40 overflow-y-auto space-y-2 mb-4 pr-1 scrollbar-thin scrollbar-thumb-gray-500">
+                          {previewGates.map((gate, i) => (
+                              <div key={i} className="flex justify-between items-center bg-gray-800 p-2 rounded text-xs border border-gray-600">
+                                  <span className="font-bold text-gray-300 w-8">{gate.name}</span>
+                                  <div className="text-gray-400 flex flex-col">
+                                      <span>{Number(gate.lat1).toFixed(6)}, {Number(gate.lon1).toFixed(6)}</span>
+                                      <span>{Number(gate.lat2).toFixed(6)}, {Number(gate.lon2).toFixed(6)}</span>
+                                  </div>
+                                  <button 
+                                    onClick={() => handleDeleteGate(i)} 
+                                    className="text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded p-1"
+                                  >
+                                      ✕
+                                  </button>
+                              </div>
+                          ))}
+                      </div>
+                      
+                      {/* Manual Add Form */}
+                      <div className="grid grid-cols-2 gap-2 text-sm bg-gray-800 p-2 rounded border border-gray-600">
+                          <input placeholder="Name (e.g. S3)" value={newGate.name} onChange={e=>setNewGate({...newGate, name: e.target.value})} className="bg-gray-700 p-1 rounded col-span-2 text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
+                          <input placeholder="Lat 1" type="number" value={newGate.lat1} onChange={e=>setNewGate({...newGate, lat1: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
+                          <input placeholder="Lon 1" type="number" value={newGate.lon1} onChange={e=>setNewGate({...newGate, lon1: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
+                          <input placeholder="Lat 2" type="number" value={newGate.lat2} onChange={e=>setNewGate({...newGate, lat2: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
+                          <input placeholder="Lon 2" type="number" value={newGate.lon2} onChange={e=>setNewGate({...newGate, lon2: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
+                          <button onClick={handleAddGate} className="col-span-2 bg-green-600 hover:bg-green-500 py-1 rounded font-bold mt-1 text-white">Add Gate</button>
+                      </div>
+                  </div>
+
+                  <div className="pt-2">
+                      <button 
+                        onClick={handleSaveTrack}
+                        disabled={!trackName || !previewLayout || uploading}
+                        className="w-full py-3 px-4 bg-red-600 hover:bg-red-500 rounded font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {uploading ? 'Saving...' : 'Save Track Configuration'}
+                      </button>
+                  </div>
+               </div>
+
+               {/* Right Column: Map Preview */}
+               <div className="bg-gray-700 rounded-lg overflow-hidden border border-gray-600 relative h-[600px] lg:h-auto flex flex-col">
+                  <div className="absolute top-2 left-2 z-10 bg-black/50 px-2 py-1 rounded text-xs text-white">
+                      Preview Mode
+                  </div>
+                  {previewLayout ? (
+                      <MapChart 
+                        geoData={previewLayout}
+                        data={[]} 
+                        gates={previewGates}
+                        width="100%"
+                        height="100%"
+                        rotation={-90}
+                      />
+                  ) : (
+                      <div className="flex h-full items-center justify-center text-gray-400 flex-col gap-2">
+                          <span className="text-4xl">🗺️</span>
+                          <span>Upload a Layout file to see the map</span>
+                      </div>
+                  )}
+               </div>
+
             </div>
           )}
 

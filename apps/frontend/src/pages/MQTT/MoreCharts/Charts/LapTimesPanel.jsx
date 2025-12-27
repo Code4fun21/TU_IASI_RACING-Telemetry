@@ -30,7 +30,7 @@ export default function LapTimesPanel({ laps, title = "Lap Times" }) {
     : -1;
 
   return (
-    <div className="w-80 rounded-lg border bg-white p-3 shadow-sm">
+    <div className="w-100 rounded-lg border bg-white p-3 shadow-sm">
       <h3 className="font-medium text-gray-700 mb-2">{title}</h3>
       <div className="text-sm text-gray-600">
         <div className="grid grid-cols-6 gap-x-2 font-semibold mb-1">

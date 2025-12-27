@@ -59,3 +59,5 @@ CREATE TABLE IF NOT EXISTS system_limits (
 -- 2. Initialize the counters (Set them to 0 starting today)
 INSERT INTO system_limits (id, count, last_reset) VALUES ('d1_writes', 0, DATE('now'));
 INSERT INTO system_limits (id, count, last_reset) VALUES ('r2_uploads', 0, DATE('now'));
+INSERT INTO system_limits (id, count, last_reset) VALUES ('d1_reads', 0, DATE('now'));
+INSERT INTO system_limits (id, count, last_reset) VALUES ('r2_downloads', 0, DATE('now'));

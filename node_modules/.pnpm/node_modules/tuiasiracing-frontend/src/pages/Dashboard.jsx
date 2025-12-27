@@ -410,25 +410,39 @@ const speedVsDistance = useMemo(() => {
             </div>
 
             {/* Map */}
-            <div className="flex gap-4 items-start">
-                <div className="grow">
-                    {geoData && (
-                        <MapChart
-                            geoData={geoData}
-                            data={mapData}
-                            gates={gatesData}
-                            width={900}
-                            height={400}
-                        />
-                    )}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">
+                
+                {/* Map Container (Takes 2/3 width) */}
+                <div className="bg-white p-4 rounded-lg shadow lg:col-span-2 relative flex flex-col min-w-0">
+                    <h3 className="text-lg font-medium text-gray-900 text-center mb-2">Track Map</h3>
+                    <div className="flex-grow relative border border-gray-100 rounded bg-gray-50 overflow-hidden">
+                        {geoData ? (
+                            <MapChart
+                                geoData={geoData}
+                                data={mapData}
+                                gates={gatesData}
+                                width="100%"   // Responsive width
+                                height="100%"  // Responsive height
+                            />
+                        ) : (
+                            <div className="flex h-full items-center justify-center text-gray-400">
+                                No Track Data
+                            </div>
+                        )}
+                    </div>
                 </div>
 
-                {/* Lap times */}
-                <LapTimesPanel
-                    laps={filtered?.Gates_times?.lap_data || []}
-                    title="Lap Times"
-                />
+                {/* Lap Times Panel (Takes 1/3 width) */}
+                <div className="bg-white rounded-lg shadow lg:col-span-1 flex flex-col overflow-hidden min-w-0">
+                    <LapTimesPanel
+                        laps={filtered?.Gates_times?.lap_data || []}
+                        title="Lap Times"
+                        className="w-full h-full border-0 shadow-none"
+                    />
+                </div>
+
             </div>
+            
 
             {/* Chart Builder */}
             <div className="rounded-lg bg-white p-4 shadow">
