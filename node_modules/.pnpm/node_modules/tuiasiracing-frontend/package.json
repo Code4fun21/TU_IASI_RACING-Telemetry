@@ -1,13 +1,10 @@
 {
-  "name": "tuiasiracing-frontend",
+  "name": "telemetry-monorepo",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "dev": "pnpm -r run dev",
+    "build": "pnpm -r run build",
+    "build:frontend": "pnpm --filter frontend run build" 
   },
   "dependencies": {
     "@headlessui/react": "^2.2.0",
