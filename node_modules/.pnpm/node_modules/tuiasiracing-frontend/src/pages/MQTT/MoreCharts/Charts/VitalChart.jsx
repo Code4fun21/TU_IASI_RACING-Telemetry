@@ -1,15 +1,36 @@
 import React, { useMemo } from 'react';
-import ReactECharts from 'echarts-for-react'; // Or your preferred wrapper, e.g. ChartWrapper
-
-// Use your custom ChartWrapper if you prefer, but standard echarts-for-react is often safer for simple use cases
-// If you want to use your ChartWrapper, swap the import and usage.
-// Here I'll use a generic approach that fits most needs.
+import ReactECharts from 'echarts-for-react'; 
 
 const VitalChart = ({ dateTime, series, height = 300 }) => {
+
+  // --- Helpers for Time Formatting ---
+  const toMs = (t) => {
+    if (t == null) return undefined;
+    const n = Number(t);
+    if (!Number.isFinite(n)) return undefined;
+    // If timestamp is roughly small (seconds), multiply by 1000
+    return n < 2e10 ? n * 1000 : n;
+  };
+
+  const fmtTime = (ms) => {
+    if (!Number.isFinite(ms)) return "";
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: tz,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      fractionalSecondDigits: 3,
+    }).format(ms);
+  };
 
   const option = useMemo(() => {
     // Basic validation
     if (!dateTime || dateTime.length === 0) return {};
+
+    // 1. Process Timestamps
+    const formattedTime = dateTime.map(t => fmtTime(toMs(t)));
 
     const seriesList = series.map(s => ({
       name: s.name,
@@ -38,8 +59,7 @@ const VitalChart = ({ dateTime, series, height = 300 }) => {
       xAxis: {
         type: 'category',
         boundaryGap: false,
-        data: dateTime,
-        axisLabel: { formatter: (val) => val } // Simplify if needed
+        data: formattedTime, // <--- Using formatted time strings
       },
       yAxis: {
         type: 'value',
@@ -59,8 +79,8 @@ const VitalChart = ({ dateTime, series, height = 300 }) => {
     <ReactECharts
       option={option}
       style={{ height: height, width: '100%' }}
-      notMerge={true} // Important: prevents merging state which can cause issues with dynamic updates
-      lazyUpdate={true} // Debounce updates for performance
+      notMerge={true} 
+      lazyUpdate={true} 
     />
   );
 };

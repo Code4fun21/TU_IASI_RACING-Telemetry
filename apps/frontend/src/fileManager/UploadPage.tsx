@@ -1,37 +1,83 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { api } from '../services/api'; 
 import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
-import MapChart from "../components/MapChart"; // Import Map for Preview
+import MapChart from "../components/MapChart"; 
+
+// --- Types & Interfaces ---
+
+interface Gate {
+  name: string;
+  lat1: number;
+  lon1: number;
+  lat2: number;
+  lon2: number;
+  isPreview?: boolean; 
+}
+
+interface NewGateForm {
+  name: string;
+  lat1: string; 
+  lon1: string;
+  lat2: string;
+  lon2: string;
+}
+
+interface Coordinate {
+  lat: number;
+  lon: number;
+}
+
+interface TrackData {
+  id: number | string;
+  name?: string;
+}
+
+interface SessionMeta {
+  csvFileName: string;
+  decodedFileName: string;
+  trackId: number;
+  date: string;
+  time: string;
+  driverId: number;
+  monopostId: number;
+}
 
 export default function UploadPage() {
   const navigate = useNavigate();
   
   // --- TABS STATE ---
   const [activeTab, setActiveTab] = useState<'session' | 'track'>('session');
-  const [uploading, setUploading] = useState(false);
+  const [uploading, setUploading] = useState<boolean>(false);
 
   // --- SESSION STATE ---
   const [sessionFile, setSessionFile] = useState<File | null>(null);
   const [plotData, setPlotData] = useState<any[]>([]);
-  const [trackId, setTrackId] = useState("1"); 
+  const [trackId, setTrackId] = useState<string>("1"); 
 
   // --- TRACK STATE ---
-  const [trackName, setTrackName] = useState("");
+  const [trackName, setTrackName] = useState<string>("");
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
   const [gatesFile, setGatesFile] = useState<File | null>(null);
 
   // --- PREVIEW & EDIT STATE ---
   const [previewLayout, setPreviewLayout] = useState<any>(null);
-  const [previewGates, setPreviewGates] = useState<any[]>([]);
-  const [newGate, setNewGate] = useState({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+  const [previewGates, setPreviewGates] = useState<Gate[]>([]);
+  
+  // Form state for manual entry
+  const [newGate, setNewGate] = useState<NewGateForm>({ 
+    name: "", lat1: "", lon1: "", lat2: "", lon2: "" 
+  });
+
+  // --- RUBBER BAND GATE DRAWING STATE ---
+  const [gateStart, setGateStart] = useState<Coordinate | null>(null);
 
   // ==========================
   // 1. SESSION LOGIC
   // ==========================
   
-  const onRaceTrackChange = (track: any) => {
+  const onRaceTrackChange = (track: TrackData) => {
     if (track && track.id) {
         setTrackId(String(track.id));
     }
@@ -40,15 +86,33 @@ export default function UploadPage() {
   const handleSessionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
+
+    // 1. Validation: Allow CSV or TXT
+    const validExtensions = ['.csv', '.txt'];
+    const fileExtension = selectedFile.name.slice(selectedFile.name.lastIndexOf('.')).toLowerCase();
+
+    // Check MIME type OR extension (MIME types can be unreliable for .txt/csv across OSs)
+    const isValidType = 
+        selectedFile.type === 'text/csv' || 
+        selectedFile.type === 'text/plain' || 
+        selectedFile.type === 'application/vnd.ms-excel' ||
+        validExtensions.includes(fileExtension);
+
+    if (!isValidType) {
+        alert("Please upload a valid .csv or .txt file.");
+        return;
+    }
+
     setSessionFile(selectedFile);
 
+    // Papa Parse handles delimiters automatically for both .csv and .txt
     Papa.parse(selectedFile, {
       header: true,
       dynamicTyping: true,
       complete: (results) => {
         setPlotData(results.data); 
       },
-      error: (err) => alert("Error parsing CSV: " + err)
+      error: (err: Error) => alert("Error parsing file: " + err.message)
     });
   };
 
@@ -69,9 +133,13 @@ export default function UploadPage() {
       const storedFileName = await api.uploadFile(sessionFile);
       const dateTime = convertUnixToDate(sessionFile.lastModified);
 
-      const sessionMeta = {
+      // 2. Dynamic Renaming: Replace extension with _decoded.json
+      // This regex replaces .csv OR .txt (case insensitive) at the end of the string
+      const decodedName = storedFileName.replace(/\.(csv|txt)$/i, '') + '_decoded.json';
+
+      const sessionMeta: SessionMeta = {
         csvFileName: storedFileName,
-        decodedFileName: `${storedFileName.replace('.csv', '')}_decoded.json`, // Pre-fill expectation
+        decodedFileName: decodedName,
         trackId: Number(trackId),
         date: dateTime.date,
         time: dateTime.time,
@@ -110,7 +178,6 @@ export default function UploadPage() {
     });
   };
 
-  // Immediate Preview for Layout
   const handleLayoutFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -125,7 +192,6 @@ export default function UploadPage() {
       }
   };
 
-  // Immediate Preview for Gates
   const handleGatesFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -133,27 +199,29 @@ export default function UploadPage() {
       try {
           const json = await readJsonFile(file);
           if (!Array.isArray(json)) throw new Error("Gates must be an array");
-          setPreviewGates(json);
+          setPreviewGates(json as Gate[]);
       } catch (err: any) {
           alert("Error parsing gates: " + err.message);
           setPreviewGates([]);
       }
   };
 
-  // Gate Editing
-  const handleAddGate = (e: React.MouseEvent) => {
+  // Gate Editing (Manual Form)
+  const handleAddGate = (e: React.MouseEvent<HTMLButtonElement>) => {
       e.preventDefault();
-      const gate = {
+      const gate: Gate = {
           name: newGate.name || `S${previewGates.length}`,
           lat1: Number(newGate.lat1),
           lon1: Number(newGate.lon1),
           lat2: Number(newGate.lat2),
           lon2: Number(newGate.lon2),
       };
+      
       if (isNaN(gate.lat1) || isNaN(gate.lon1) || isNaN(gate.lat2) || isNaN(gate.lon2)) {
           alert("Invalid coordinates");
           return;
       }
+      
       setPreviewGates([...previewGates, gate]);
       setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
   };
@@ -161,6 +229,34 @@ export default function UploadPage() {
   const handleDeleteGate = (index: number) => {
       const updated = previewGates.filter((_, i) => i !== index);
       setPreviewGates(updated);
+  };
+
+  // ==========================
+  // 3. MAP INTERACTION (Visual Gate Creator)
+  // ==========================
+
+  const handleMapClick = (coords: Coordinate | any) => {
+    // Coords come from MapChart as { lat, lon }
+    if (!coords || typeof coords.lat !== 'number' || typeof coords.lon !== 'number') return;
+
+    if (!gateStart) {
+        // FIRST CLICK: Set start point. (Rubber band will be drawn by MapChart)
+        setGateStart({ lat: coords.lat, lon: coords.lon });
+    } else {
+        // SECOND CLICK: Finalize the gate
+        const newGateObj: Gate = {
+            name: `G${previewGates.length + 1}`,
+            lat1: gateStart.lat,
+            lon1: gateStart.lon,
+            lat2: coords.lat,
+            lon2: coords.lon,
+        };
+        
+        setPreviewGates([...previewGates, newGateObj]);
+        
+        // Reset drawing state
+        setGateStart(null);
+    }
   };
 
   const handleSaveTrack = async () => {
@@ -171,7 +267,7 @@ export default function UploadPage() {
     setUploading(true);
 
     try {
-      // 1. Convert Current State to Files (Capture Edits)
+      // 1. Convert Current State to Files
       const layoutBlob = new Blob([JSON.stringify(previewLayout)], { type: "application/json" });
       const gatesBlob = new Blob([JSON.stringify(previewGates)], { type: "application/json" });
       
@@ -195,6 +291,7 @@ export default function UploadPage() {
       setGatesFile(null);
       setPreviewLayout(null);
       setPreviewGates([]);
+      setGateStart(null);
 
     } catch (error: any) {
       console.error(error);
@@ -243,10 +340,12 @@ export default function UploadPage() {
               <h2 className="text-xl font-semibold mb-4 text-center">Add New Telemetry File</h2>
               
               <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                <label className="block text-sm font-medium mb-2 text-gray-300">Select CSV File</label>
+                <label className="block text-sm font-medium mb-2 text-gray-300">Select File (CSV or TXT)</label>
+                
+                {/* 3. Updated Accept Attribute */}
                 <input 
                   type="file" 
-                  accept=".csv"
+                  accept=".csv,.txt" 
                   onChange={handleSessionFileChange}
                   className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-red-600 file:text-white hover:file:bg-red-500 cursor-pointer"
                 />
@@ -376,6 +475,7 @@ export default function UploadPage() {
                       </div>
                   )}
                </div>
+
 
             </div>
           )}

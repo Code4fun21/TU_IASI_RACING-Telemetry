@@ -1,5 +1,5 @@
 import PropTypes from "prop-types";
-import { useEffect, useRef, memo } from "react";
+import { useEffect, useRef, memo, useMemo } from "react";
 import * as echarts from "echarts";
 
 // Efficient chart wrapper component
@@ -45,10 +45,41 @@ const MultiLineChart = ({ data, height = 500 }) => {
         "#FFA07A", "#20B2AA", "#778899", "#FF69B4",
     ];
 
-    // Auto-generate series from data keys except 'timestamps'
+    // --- Helpers for Time Formatting ---
+    const toMs = (t) => {
+        if (t == null) return undefined;
+        const n = Number(t);
+        if (!Number.isFinite(n)) return undefined;
+        // If timestamp is roughly small (seconds), multiply by 1000
+        return n < 2e10 ? n * 1000 : n;
+    };
+
+    const fmtTime = (ms) => {
+        if (!Number.isFinite(ms)) return "";
+        // Use Intl for consistent HH:MM:SS.mmm formatting
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return new Intl.DateTimeFormat(undefined, {
+            timeZone: tz,
+            hour12: false,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            fractionalSecondDigits: 3,
+        }).format(ms);
+    };
+
+    // --- Process Data ---
+    
+    // 1. Format Timestamps for X-Axis
+    const formattedTimestamps = useMemo(() => {
+        const raw = data.timestamps || [];
+        return raw.map((ts) => fmtTime(toMs(ts)));
+    }, [data.timestamps]);
+
+    // 2. Auto-generate series from data keys except 'timestamps'
     const dataKeys = Object.keys(data).filter((key) => key !== "timestamps");
 
-    const series = dataKeys.map((key, index) => ({
+    const series = dataKeys.map((key) => ({
         name: key,
         type: "line",
         showSymbol: false,
@@ -77,7 +108,7 @@ const MultiLineChart = ({ data, height = 500 }) => {
         xAxis: {
             type: "category",
             boundaryGap: false,
-            data: data.timestamps,
+            data: formattedTimestamps, // <--- Used the formatted time strings here
         },
         yAxis: {
             type: "value",
