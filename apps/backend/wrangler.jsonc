@@ -11,28 +11,20 @@
 		"enabled": true
 	},
 	"d1_databases": [
-		{
-			"binding": "DB-1",
-			"database_name": "telemetry-db",
-			"database_id": "xxxx-xxxx-local-xxxx",
-		},
-		{
-			"binding": "DB",
-			"database_name": "telemetry-db",
-			"database_id": "fae310ef-1c82-462e-87ff-ef02c5bf6abe"
-		}
-	],
-	"r2_buckets": [
-		{
-			"binding": "BUCKET-1",
-			"bucket_name": "telemetry-files",
-			// CHANGE THIS LINE:
-		},
-		{
-			"bucket_name": "BUCKET",
-			"binding": "telemetry_files"
-		}
-	]
+    {
+      "binding": "DB",                                   // KEEP: Matches your code (c.env.DB)
+      "database_name": "telemetry-db",
+      "database_id": "fae310ef-1c82-462e-87ff-ef02c5bf6abe" // KEEP: Real Production ID
+    }
+  ],
+
+  // --- R2 BUCKET ---
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",                               // KEEP: Matches your code (c.env.BUCKET)
+      "bucket_name": "telemetry-files"                   // KEEP: Real Bucket Name
+    }
+  ]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
