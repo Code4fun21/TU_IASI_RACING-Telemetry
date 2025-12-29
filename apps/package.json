@@ -1,0 +1,14 @@
+{
+  "name": "telemetry-root",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.1.0",
+"scripts": {
+    "dev": "pnpm --recursive --parallel --filter \"telemetry-*\" dev",
+    "build": "pnpm --filter telemetry-frontend build",
+    "deploy:backend": "pnpm --filter telemetry-backend deploy"
+  },
+  "devDependencies": {
+    "pnpm": "^9.1.0"
+  }
+}

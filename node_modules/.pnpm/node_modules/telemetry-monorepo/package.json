@@ -1,12 +1,14 @@
 {
-  "name": "telemetry-monorepo",
+  "name": "telemetry-frontend",
   "private": true,
   "scripts": {
-    "dev": "pnpm -r run dev",
-    "build": "pnpm -r run build",
-    "build:frontend": "pnpm --filter frontend run build" 
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@turf/turf": "^7.3.1",
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@tailwindcss/vite": "^4.0.0",

@@ -1,23 +1,23 @@
 {
-	"name": "backend",
-	"version": "0.0.0",
-	"private": true,
-	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
-		"test": "vitest",
-		"cf-typegen": "wrangler types"
-	},
-	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.49.0"
-	},
-	"dependencies": {
-		"@telemetry/shared": "workspace:*",
-		"hono": "^4.10.6",
-		"zod": "3.23.8"
-	}
+  "name": "telemetry-backend",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "test": "vitest",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "typescript": "^5.5.2",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.49.0"
+  },
+  "dependencies": {
+    "@telemetry/shared": "workspace:*",
+    "hono": "^4.10.6",
+    "zod": "3.23.8"
+  }
 }
