@@ -1,0 +1,3 @@
+packages:
+  - 'apps/*'       # This covers frontend and backend
+  - 'packages/*'   # This covers shared
