@@ -12,9 +12,9 @@ import throttlePosition from "../../../components/dummyData/throttlePosition.jso
 import brakePressure from "../../../components/dummyData/brakePressure.json";
 
 export default function VitalChart({ height = 500 }) {
-    useEffect(() => {
-        echarts.registerMap("SpeedParkBacau", geoJson);
-    }, []);
+    // useEffect(() => {
+    //     echarts.registerMap("SpeedParkBacau", geoJson);
+    // }, []);
     const colors = ["#5470C6", "#91CC75", "#EE6666", "#73C0DE", "#3BA272", "#FC8452"];
     const options = {
         color: colors,

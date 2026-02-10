@@ -1,187 +1,319 @@
+import { useEffect, useMemo, useState } from "react";
 import * as echarts from "echarts";
+import { useTelemetry } from "../../store/OfflineDataStoreadge"; // Check spelling of this path
 
-import { useEffect } from "react";
-import TopActionBar from "../MQTT/Components/TopActionBar";
-import MapChart from "../../components/MapChart";
-import VitalChart from "./Charts/VitalChart";
-import OfflineActionBar from "./OfflineActionBar";
+import TimestampSelect from "../MQTT/Components/TimestampSelect";
+import VitalChart from "../MQTT/MoreCharts/Charts/VitalChart";
+import GGChart from "../MQTT/MoreCharts/Charts/GGChart"
+
+// Helper remains the same
+const processSeries = (dataPairArray) => {
+    if (!dataPairArray || dataPairArray.length === 0) return { times: [], values: [] };
+    const times = dataPairArray.map(pt => pt[0]);
+    const values = dataPairArray.map(pt => pt[1]);
+    return { times, values };
+};
+
+
+const prepareGGData = (accelX, accelY) => {
+    if (!accelX || !accelY || accelX.length === 0 || accelY.length === 0) return [];
+
+    // Simple synchronization: Assume timestamps match closely enough or use the index if synced by decoder
+    // Since they come from the same CAN frame (usually 0x118), indices usually align.
+    const points = [];
+    const len = Math.min(accelX.length, accelY.length);
+    
+    for (let i = 0; i < len; i++) {
+        // [Lateral G (Y-axis sensor), Longitudinal G (X-axis sensor)]
+        // Standard G-G diagram: X-axis = Lateral, Y-axis = Longitudinal
+        points.push([
+            accelY[i][1], // Lateral G (Left/Right)
+            accelX[i][1]  // Longitudinal G (Accel/Brake)
+        ]);
+    }
+    return points;
+};
 
 export default function AdvanceChartsOffline() {
+    // --- 1. MOVED HOOKS INSIDE THE COMPONENT ---
     const GROUP_ID = "syncGroup";
+    
+    // Get data directly from context
+    const { telemetryData, sessionInfo } = useTelemetry();     
+    
+    // You likely need these states for your selectors later
+    const [selectedTs, setSelectedTs] = useState(null);
+    const [selectedLap, setSelectedLap] = useState(null);
 
+    // --- 2. REMOVED REDUNDANT STATE SETTERS ---
+    // You don't need setTelemetry(telemetryData). Just use 'telemetryData'.
+
+    // Safety check
+    console.log(telemetryData)
+    if (!telemetryData) {
+        return (
+            <div className="p-10 text-center text-gray-500">
+                <p>No telemetry data loaded.</p>
+                <p className="text-sm mt-2">Go back to Dashboard and load a file first.</p>
+            </div>
+        );
+    }
+
+    const gatesArray = useMemo(() => {
+        // Safety check to ensure data exists
+        if (!telemetryData.Gates_times?.lap_data) return [];
+
+        return telemetryData.Gates_times.lap_data.map((lap, index) => ({
+            label: `Lap ${index + 1}`,
+            index: index,
+            // 1. ADD THESE LINES SO THE FILTER WORKS:
+            startTime: lap.S0, 
+            endTime: lap.S3 || lap.ts 
+        }));
+    }, [telemetryData]);
+
+const filtered = useMemo(() => {
+        let minTime = -Infinity;
+        let maxTime = Infinity;
+        let isFiltering = false;
+
+        // PRIORITIZE LAP SELECTION
+        if (selectedLap !== null && gatesArray[selectedLap]) {
+            const lap = gatesArray[selectedLap];
+            minTime = lap.startTime;
+            maxTime = lap.endTime;
+            isFiltering = true;
+        } 
+        // FALLBACK TO STINT SELECTION
+        else if (selectedTs) {
+            // Ensure we compare seconds to seconds
+            // If selectedTs strings are ISO dates, convert to seconds
+            minTime = Number(selectedTs.startTime); 
+            maxTime = Number(selectedTs.endTime);
+            isFiltering = true;
+        }
+
+        // If no filter is active, return all data immediately (performance opt)
+        if (!isFiltering) return telemetryData;
+
+        const newFiltered = {};
+        
+        // Loop through all data series (RPM, Speed, etc.)
+        Object.keys(telemetryData).forEach(key => {
+            // Always keep the Gates/Laps data intact so we don't break the lap selector
+            if (key === "Gates_times") {
+                newFiltered[key] = telemetryData[key];
+                return;
+            }
+
+            const seriesData = telemetryData[key];
+
+            // Only filter arrays (the actual sensor data)
+            if (Array.isArray(seriesData)) {
+                 // Keep points strictly within the time window
+                 newFiltered[key] = seriesData.filter(pt => {
+                     const t = pt[0]; // Timestamp is index 0
+                     return t >= minTime && t <= maxTime;
+                 });
+            } else {
+                 // Pass through non-array objects (meta data)
+                 newFiltered[key] = seriesData;
+            }
+        });
+
+        return newFiltered;
+    }, [telemetryData, selectedLap, selectedTs, gatesArray]);
     useEffect(() => {
-        // Connect all charts with the same group
         echarts.connect(GROUP_ID);
-        // return () => echarts.disposeConnection("fleet");
     }, []);
 
-    return (
-        <>
-            <div>
-                <OfflineActionBar />
-                <dl className="mt-5 flex flex-row  gap-5 ">
-                    <div className="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-                        <dt className="truncate text-sm font-medium text-gray-500 text-center">Vital Functions</dt>
 
-                        <MapChart data={sampleData} width={800} height={400} group={GROUP_ID} />
-                    </div>
-                </dl>
-                <div className="mx-auto max-w-full py-6 ">
-                    <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
-                        <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Vital Functions
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">
-                                        Vital Functions
-                                    </dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                        <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Section title
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">Gearing</dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                    </div>
-                </div>
-                <div className="mx-auto max-w-full py-6 ">
-                    <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
-                        <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Engine Performance
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">
-                                        Engine Performance
-                                    </dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                        <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Driver Activity
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">
-                                        Driver Activity
-                                    </dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                    </div>
-                </div>
-                <div className="mx-auto max-w-full py-6 ">
-                    <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
-                        <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    G-Force
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">G-Force</dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                        <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Braking
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">Braking</dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                    </div>
-                </div>
-                <div className="mx-auto max-w-full py-6 ">
-                    <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
-                        <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
-                            <section aria-labelledby="section-2-title">
-                                <h2 id="section-2-title" className="sr-only">
-                                    Roll and Pitch Angle
-                                </h2>
-                                <div className="overflow-visible rounded-lg bg-white shadow">
-                                    <dt className="truncate text-sm font-medium text-gray-500 text-center">
-                                        Roll and Pitch Angle
-                                    </dt>
-                                    <VitalChart />
-                                </div>
-                            </section>
-                        </div>
-                    </div>
-                </div>
+        // --- 3. Use telemetryData directly ---
+    const vitalChartsData = useMemo(() => {
+        if (!filtered.RPM || !filtered.GPS_Speed) return null;
+
+        const rpm = processSeries(filtered.RPM);
+        const speed = processSeries(filtered.GPS_Speed);
+        
+        return {
+            times: rpm.times, 
+            series: [
+                { name: "Engine RPM", data: rpm.values, unit: "rpm" },
+                { name: "Speed", data: speed.values, unit: "km/h" }
+            ]
+        };
+    }, [filtered]);
+
+    const ggData = useMemo(() => {
+        // Use the LPF filtered data we created in the decoder
+        // Note: Make sure 'Acceleration_on_X_axis' exists in your filtered data
+        const accX = filtered.Acceleration_on_X_axis;
+        const accY = filtered.Acceleration_on_Z_axis;
+
+        if (!accX || !accY) return [];
+
+        return prepareGGData(accX, accY);
+    }, [filtered]);
+
+   
+
+    return (
+        <div className="p-4 space-y-6">
+            {/* Timestamp selector */}
+            <div className="rounded-lg bg-white p-4 shadow space-y-2">
+                <h3 className="font-medium text-gray-700">Choose Timestamp</h3>
+                <TimestampSelect 
+                    sessionId={sessionInfo?.id} 
+                    onSelect={(ts) => {
+                        setSelectedTs(ts);
+                        setSelectedLap(null); 
+                    }} 
+                />
             </div>
-        </>
+
+            {/* Lap selector */}
+            <div className="rounded-lg bg-white p-4 shadow">
+                <h3 className="font-medium text-gray-700 mb-2">Choose Lap</h3>
+                <select
+                    className="w-full border-gray-300 rounded-md"
+                    value={selectedLap ?? ""}
+                    onChange={(e) => setSelectedLap(e.target.value === "" ? null : Number(e.target.value))}
+                >
+                    <option value="">All laps</option>
+                    {gatesArray.map((g, i) => (
+                        <option key={i} value={i}>{g.label}</option>
+                    ))}
+                </select>
+            </div>
+            
+            {/* Chart */}
+            {vitalChartsData && (
+                <div className="rounded-lg bg-white p-4 shadow">
+                     <VitalChart 
+                        dateTime={vitalChartsData.times} 
+                        series={vitalChartsData.series} 
+                        group={GROUP_ID} 
+                        height={300}
+                    />
+                </div>
+            )}
+            {ggData && ggData.length > 0 && (
+                    <div className="rounded-lg bg-white p-4 shadow">
+                        <GGChart data={ggData} height={350} />
+                    </div>
+                )}
+            
+        </div>
     );
 }
+// <div>
+//                 {/* <OfflineActionBar /> */}
+//                 <dl className="mt-5 flex flex-row  gap-5 ">
+//                     <div className="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
+//                         <dt className="truncate text-sm font-medium text-gray-500 text-center">Vital Functions</dt>
 
-const sampleData = [
-    [26.94207398, 46.52643458, 180],
-    [26.94180435, 46.52640764, 170],
-    [26.94153472, 46.52638069, 106],
-    [26.94132361, 46.5262441, 43],
-    [26.94134956, 46.52597715, 62],
-    [26.94140095, 46.52571109, 55],
-    [26.94145234, 46.52544503, 58],
-    [26.94150373, 46.52517897, 75],
-    [26.94168644, 46.52503626, 120],
-    [26.94183116, 46.52520274, 71],
-    [26.94177809, 46.52546827, 69],
-    [26.94172267, 46.52573352, 96],
-    [26.94167664, 46.52599957, 55],
-    [26.94185747, 46.5261368, 77],
-    [26.94208074, 46.52606507, 65],
-    [26.94197211, 46.52582961, 56],
-    [26.94206511, 46.52558574, 117],
-    [26.94229455, 46.52544947, 43],
-    [26.94254363, 46.52535126, 82],
-    [26.94269306, 46.52512672, 111],
-    [26.94260251, 46.52497052, 53],
-    [26.94237496, 46.525104, 102],
-    [26.9421197, 46.5250598, 97],
-    [26.94196775, 46.52486141, 90],
-    [26.9416997, 46.52482855, 64],
-    [26.94143252, 46.52479332, 73],
-    [26.94128917, 46.52459868, 96],
-    [26.94130862, 46.52432841, 42],
-    [26.94132806, 46.52405815, 93],
-    [26.94144042, 46.52386588, 79],
-    [26.94165676, 46.52393611, 50],
-    [26.94179158, 46.5239891, 65],
-    [26.94186998, 46.52387751, 64],
-    [26.94191286, 46.52374839, 107],
-    [26.9420118, 46.52366189, 99],
-    [26.94216064, 46.52370255, 92],
-    [26.94214793, 46.52394913, 77],
-    [26.94209251, 46.52417766, 91],
-    [26.94184013, 46.52428137, 106],
-    [26.94168799, 46.52443823, 88],
-    [26.94177362, 46.52457135, 107],
-    [26.94214979, 46.52464247, 82],
-    [26.94258626, 46.52470866, 93],
-    [26.94291695, 46.52477053, 81],
-    [26.94309684, 46.52494657, 104],
-    [26.94295158, 46.52524165, 104],
-    [26.94270977, 46.52562038, 107],
-    [26.94243157, 46.52607885, 67],
-    [26.94219955, 46.5262962, 96],
-    [26.94207065, 46.52640425, 111],
-    [26.94206356, 46.52643461, 73],
-];
+//                         <MapChart data={sampleData} width={800} height={400} />
+//                     </div>
+//                 </dl>
+//                 <div className="mx-auto max-w-full py-6 ">
+//                     <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
+//                         <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Vital Functions
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">
+//                                         Vital Functions
+//                                     </dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                         <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Section title
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">Gearing</dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                     </div>
+//                 </div>
+//                 <div className="mx-auto max-w-full py-6 ">
+//                     <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
+//                         <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Engine Performance
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">
+//                                         Engine Performance
+//                                     </dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                         <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Driver Activity
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">
+//                                         Driver Activity
+//                                     </dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                     </div>
+//                 </div>
+//                 <div className="mx-auto max-w-full py-6 ">
+//                     <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
+//                         <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     G-Force
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">G-Force</dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                         <div className="order-7 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Braking
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">Braking</dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                     </div>
+//                 </div>
+//                 <div className="mx-auto max-w-full py-6 ">
+//                     <div className="grid grid-cols-1  items-start gap-4 lg:grid-cols-2 xl:grid-cols-4 ">
+//                         <div className="order-6 col-span-4 grid grid-cols-1 lg:col-span-2">
+//                             <section aria-labelledby="section-2-title">
+//                                 <h2 id="section-2-title" className="sr-only">
+//                                     Roll and Pitch Angle
+//                                 </h2>
+//                                 <div className="overflow-visible rounded-lg bg-white shadow">
+//                                     <dt className="truncate text-sm font-medium text-gray-500 text-center">
+//                                         Roll and Pitch Angle
+//                                     </dt>
+//                                     <VitalChart />
+//                                 </div>
+//                             </section>
+//                         </div>
+//                     </div>
+//                 </div>
+//             </div>

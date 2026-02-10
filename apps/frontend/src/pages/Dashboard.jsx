@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useContext } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { api } from "../services/api";
 import { DriverContext } from "../context/DriverContext";
+import { useTelemetry } from "../store/OfflineDataStoreadge";
 
 // --- COMPONENTS ---
 import MapChart from "../components/MapChart";
@@ -39,6 +40,8 @@ const haversine = (lat1, lon1, lat2, lon2) => {
     return 2 * R * Math.asin(Math.sqrt(a));
 };
 
+
+
 export default function Dashboard() {
     const navigate = useNavigate();
     const location = useLocation();
@@ -49,14 +52,14 @@ export default function Dashboard() {
     // ==========================================
 
     const { fileData, session } = location.state || {};
-    // Ensure rawData is an array
+
     const rawData = useMemo(() => {
-    // If fileData is the new object format { rows: [...] }, use .rows
-    if (fileData && Array.isArray(fileData.rows)) return fileData.rows;
-    // Fallback for old files (just an array)
-    if (Array.isArray(fileData)) return fileData;
-    return [];
-}, [fileData]);
+    
+        if (fileData && Array.isArray(fileData.rows)) return fileData.rows;
+    
+        if (Array.isArray(fileData)) return fileData;
+        return [];
+    }, [fileData]);
 
     const [geoData, setGeoData] = useState(null);
     const [gatesData, setGatesData] = useState([]);
@@ -67,6 +70,8 @@ export default function Dashboard() {
     const [staged, setStaged] = useState([]);
     const [pick, setPick] = useState("");
     const [committed, setCommitted] = useState([]);
+
+    const {setTelemetryData, setSessionInfo}=useTelemetry();
 
     // Safety Check
     useEffect(() => {
@@ -126,6 +131,20 @@ export default function Dashboard() {
                 "Sync_loss_counter": "sync-lossCounter", "Sync_loss_reason_code": "sync-lossReasonCode",
                 "Average_fuel_flow": "averageFuelFlow",
                 "Distance": "Distance",
+                "Acceleration_on_X_axis_KF": "accelerationX_KF", 
+                "Acceleration_on_Y_axis_KF": "accelerationY_KF", 
+                "Acceleration_on_Z_axis_KF": "accelerationZ_KF", 
+                
+                "Gyroscope_on_X_axis_KF": "gyroX_KF", 
+                "Gyroscope_on_Y_axis_KF": "gyroY_KF", 
+                "Gyroscope_on_Z_axis_KF": "gyroZ_KF",
+                "Acceleration_on_X_axis_RAW": "accelerationX_RAW", 
+                "Acceleration_on_Y_axis_RAW": "accelerationY_RAW", 
+                "Acceleration_on_Z_axis_RAW": "accelerationZ_RAW", 
+                
+                "Gyroscope_on_X_axis_RAW": "gyroX_RAW", 
+                "Gyroscope_on_Y_axis_RAW": "gyroY_RAW", 
+                "Gyroscope_on_Z_axis_RAW": "gyroZ_RAW",
             };
             const sourceKey = keyMap[targetKey] || targetKey;
 
@@ -150,9 +169,13 @@ export default function Dashboard() {
             .filter(pt => pt[1] !== null); 
         };
 
-        // Scaling Functions (Matching Python Backend)
-        const scaleAccel = (v) => (v / ACCEL_SENS) * G_TO_MS2;
-        const scaleGyro = (v) => (v / GYRO_SENS) * DEG_TO_RAD;
+        // const scaleAccel = (v) => (v / ACCEL_SENS); 
+
+
+        // const scaleGyro = (v) => (v / GYRO_SENS);
+        const scaleFactor = 1.0; 
+
+
 
         const out = {
             ECU_time: extract("ECU_time"), 
@@ -168,13 +191,13 @@ export default function Dashboard() {
             GPS_Speed: extract("GPS_Speed"),
             
             // Apply Math for IMU
-            Acceleration_on_X_axis: extract("Acceleration_on_X_axis", scaleAccel), 
-            Acceleration_on_Y_axis: extract("Acceleration_on_Y_axis", scaleAccel),
-            Acceleration_on_Z_axis: extract("Acceleration_on_Z_axis", scaleAccel), 
+            Acceleration_on_X_axis: extract("Acceleration_on_X_axis"), 
+            Acceleration_on_Y_axis: extract("Acceleration_on_Y_axis"),
+            Acceleration_on_Z_axis: extract("Acceleration_on_Z_axis"), 
             
-            Gyroscope_on_X_axis: extract("Gyroscope_on_X_axis", scaleGyro),
-            Gyroscope_on_Y_axis: extract("Gyroscope_on_Y_axis", scaleGyro), 
-            Gyroscope_on_Z_axis: extract("Gyroscope_on_Z_axis", scaleGyro),
+            Gyroscope_on_X_axis: extract("Gyroscope_on_X_axis"),
+            Gyroscope_on_Y_axis: extract("Gyroscope_on_Y_axis"), 
+            Gyroscope_on_Z_axis: extract("Gyroscope_on_Z_axis"),
             
             Brake_Pressure: extract("Brake_Pressure"), 
             Gear: extract("Gear"), 
@@ -200,6 +223,20 @@ export default function Dashboard() {
             Sync_loss_reason_code: extract("Sync_loss_reason_code"),
             Average_fuel_flow: extract("Average_fuel_flow"),
             Distance: extract("Distance"),
+            Acceleration_on_X_axis_KF: extract("Acceleration_on_X_axis_KF"), 
+            Acceleration_on_Y_axis_KF: extract("Acceleration_on_Y_axis_KF"),
+            Acceleration_on_Z_axis_KF: extract("Acceleration_on_Z_axis_KF"), 
+            
+            Gyroscope_on_X_axis_KF: extract("Gyroscope_on_X_axis_KF"),
+            Gyroscope_on_Y_axis_KF: extract("Gyroscope_on_Y_axis_KF"), 
+            Gyroscope_on_Z_axis_KF: extract("Gyroscope_on_Z_axis_KF"),
+            Acceleration_on_X_axis_RAW: extract("Acceleration_on_X_axis_RAW"), 
+            Acceleration_on_Y_axis_RAW: extract("Acceleration_on_Y_axis_RAW"),
+            Acceleration_on_Z_axis_RAW: extract("Acceleration_on_Z_axis_RAW"), 
+            
+            Gyroscope_on_X_axis_RAW: extract("Gyroscope_on_X_axis_RAW"),
+            Gyroscope_on_Y_axis_RAW: extract("Gyroscope_on_Y_axis_RAW"), 
+            Gyroscope_on_Z_axis_RAW: extract("Gyroscope_on_Z_axis_RAW"),
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
@@ -277,6 +314,14 @@ export default function Dashboard() {
         return newFiltered;
     }, [allSeries, selectedLap, selectedTs, gatesArray]);
 
+
+    useEffect(() => {
+        if (filtered && Object.keys(filtered).length > 0) {
+            setTelemetryData(filtered); // Save filtered arrays to global storage
+            setSessionInfo(session);    // Save session metadata
+        }
+    }, [filtered, session, setTelemetryData, setSessionInfo]);
+
     // ==========================================
     // 2. VIEW HELPERS (For Old Render Compatibility)
     // ==========================================
@@ -347,9 +392,8 @@ const speedVsDistance = useMemo(() => {
         ["Battery", "Battery_voltage", "V"], ["Coolant Temp", "Coolant_temperature", "°C"],
         ["Manifold Pressure", "Manifold_air_pressure", "kPa"], ["Manifold Temp", "Manifold_air_temperature", "°C"],
         ["Gear", "Gear", "-"], ["Brake Pressure", "Brake_Pressure", "Bar"], ["Steering Angle", "Steering_Angle", "deg"],
-        ["BSPD", "BSPD", "-"], ["Accel X", "Acceleration_on_X_axis", "m/s²"], ["Accel Y", "Acceleration_on_Y_axis", "m/s²"],
-        ["Accel Z", "Acceleration_on_Z_axis", "m/s²"], ["Gyro X", "Gyroscope_on_X_axis", "rad/s"],
-        ["Gyro Y", "Gyroscope_on_Y_axis", "rad/s"], ["Gyro Z", "Gyroscope_on_Z_axis", "rad/s"],
+        ["BSPD", "BSPD", "-"],
+       
         ["Damper FL", "Damper_Left_Front", "mm"], ["Damper FR", "Damper_Right_Front", "mm"],
         ["Damper RL", "Damper_Left_Rear", "mm"], ["Damper RR", "Damper_Right_Rear", "mm"],
         ["Air Density Corr.", "Air_density_correction", "%"], ["Warmup Corr.", "Warmup_correction", "%"],
@@ -359,6 +403,31 @@ const speedVsDistance = useMemo(() => {
         ["TPS Rate", "Rate_of_change_of_TPS", "%/s"], ["RPM Rate", "Rate_of_change_of_RPM", "RPM/s"],
         ["Sync Loss Count", "Sync_loss_counter", "cnt"], ["Sync Loss Reason", "Sync_loss_reason_code", "code"],
         ["Avg Fuel Flow", "Average_fuel_flow", "cc/min"],
+
+        ["Accel X (LPF)", "Acceleration_on_X_axis", "G"], 
+        ["Accel Y (LPF)", "Acceleration_on_Y_axis", "G"],
+        ["Accel Z (LPF)", "Acceleration_on_Z_axis", "G"],
+        
+        ["Accel X (Kalman)", "Acceleration_on_X_axis_KF", "G"], 
+        ["Accel Y (Kalman)", "Acceleration_on_Y_axis_KF", "G"],
+        ["Accel Z (Kalman)", "Acceleration_on_Z_axis_KF", "G"],
+
+        ["Accel X (RAW)", "Acceleration_on_X_axis_RAW", "G"], 
+        ["Accel Y (RAW)", "Acceleration_on_Y_axis_RAW", "G"],
+        ["Accel Z (RAW)", "Acceleration_on_Z_axis_RAW", "G"],
+        
+
+        ["Gyro X (LPF)", "Gyroscope_on_X_axis", "rad/s"],
+        ["Gyro Y (LPF)", "Gyroscope_on_Y_axis", "rad/s"], 
+        ["Gyro Z (LPF)", "Gyroscope_on_Z_axis", "rad/s"],
+
+        ["Gyro X (Kalman)", "Gyroscope_on_X_axis_KF", "rad/s"],
+        ["Gyro Y (Kalman)", "Gyroscope_on_Y_axis_KF", "rad/s"], 
+        ["Gyro Z (Kalman)", "Gyroscope_on_Z_axis_KF", "rad/s"],
+
+        ["Gyro X (RAW)", "Gyroscope_on_X_axis_RAW", "rad/s"],
+        ["Gyro Y (RAW)", "Gyroscope_on_Y_axis_RAW", "rad/s"], 
+        ["Gyro Z (RAW)", "Gyroscope_on_Z_axis_RAW", "rad/s"],
     ];
 
     const signalsCatalog = useMemo(() => {
@@ -555,7 +624,7 @@ const speedVsDistance = useMemo(() => {
                 <AutoPairChart
                     align="base-fastest"
                     alignMethod="linear"
-                    toleranceMs={800}
+                    toleranceMs={1000}
                     series={[
                         {
                             name: "Throttle", unit: "%",
@@ -592,17 +661,17 @@ const speedVsDistance = useMemo(() => {
                     height={300}
                     series={[
                         {
-                            name: "Accel X", unit: "m/s²",
+                            name: "Accel X", unit: "G",
                             time: timeStamps(filtered.Acceleration_on_X_axis),
                             data: filtered.Acceleration_on_X_axis?.map(pt => pt[1]) || []
                         },
                         {
-                            name: "Accel Y", unit: "m/s²",
+                            name: "Accel Y", unit: "G",
                             time: timeStamps(filtered.Acceleration_on_Y_axis),
                             data: filtered.Acceleration_on_Y_axis?.map(pt => pt[1]) || []
                         },
                         {
-                            name: "Accel Z", unit: "m/s²",
+                            name: "Accel Z", unit: "G",
                             time: timeStamps(filtered.Acceleration_on_Z_axis),
                             data: filtered.Acceleration_on_Z_axis?.map(pt => pt[1]) || []
                         }
