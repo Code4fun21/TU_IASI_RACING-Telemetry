@@ -155,10 +155,7 @@ export default function AdvanceChartsOffline() {
         return applyCalibration(filtered.Acceleration_on_X_axis, filtered.Acceleration_on_Z_axis, calibration);
     }, [filtered, calibration]);
 
-    const ggData2 = useMemo(() => {
-        if (!filtered.Acceleration_on_X_axis || !filtered.Acceleration_on_Y_axis) return [];
-        return applyCalibration(filtered.Acceleration_on_X_axis, filtered.Acceleration_on_Y_axis, calibration);
-    }, [filtered, calibration]);
+
 
     const vitalData = useMemo(() => {
         if (!filtered.RPM || !filtered.GPS_Speed) return null;
@@ -195,10 +192,7 @@ export default function AdvanceChartsOffline() {
                 <GGChart data={ggData} height={400} />
             </div>
 
-            <div className="bg-white p-4 shadow rounded-lg">
-                <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Auto-Leveled2)</h3>
-                <GGChart data={ggData2} height={400} />
-            </div>
+
 
 {/* 118 (Accel XYZ) - Converted to AutoPair */}
             <div className="rounded-lg bg-white p-4 shadow">
