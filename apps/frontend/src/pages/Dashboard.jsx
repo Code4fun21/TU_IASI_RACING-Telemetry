@@ -109,12 +109,11 @@ useEffect(() => {
     }, [currentSession?.trackId]);
 
     // ---------- DATA PARSING & CONVERSION ----------
-    const allSeries = useMemo(() => {
-        if (rawData.length === 0) return {};
+// 1. Parse Raw Data ONLY if a file was uploaded (Heavy Logic)
+    const parsedData = useMemo(() => {
+        if (!rawData || rawData.length === 0) return null;
 
         // Helper to extract and scale data
-        // targetKey: Dashboard Name, sourceKey: CSV Column Name, scaleFn: Math function
-        if (rawData && rawData.length > 0) {
         const extract = (targetKey, scaleFn = (v) => v) => {
             const keyMap = {
                 "RPM": "rpm", "Throttle_position": "throttlePosition", "Battery_voltage": "batteryVoltage",
@@ -154,34 +153,30 @@ useEffect(() => {
             };
             const sourceKey = keyMap[targetKey] || targetKey;
 
-            return rawData.map(row => {
+            // --- OPTIMIZATION: DOWNSAMPLING ---
+            const STEP = 1; 
+            
+            const result = [];
+
+            for (let i = 0; i < rawData.length; i += STEP) {
+                const row = rawData[i];
                 const ts = Number(row.timestamp);
                 let val = null;
-                
+
                 if (targetKey === "ECU_time") {
                     val = ts;
                 } else if (Object.prototype.hasOwnProperty.call(row, sourceKey)) {
                     const rawVal = row[sourceKey];
                     if (rawVal !== null && rawVal !== undefined && rawVal !== "") {
                         const num = Number(rawVal);
-                        if (!isNaN(num)) {
-                            val = scaleFn(num); // Apply scaling (e.g., IMU conversion)
-                        }
+                        if (!isNaN(num)) val = scaleFn(num);
                     }
                 }
-                return [ts, val];
-            })
-            // *** CRITICAL: Filter out nulls to prevent chart recursion crash ***
-            .filter(pt => pt[1] !== null); 
+
+                if (val !== null) result.push([ts, val]);
+            }
+            return result;
         };
-
-        // const scaleAccel = (v) => (v / ACCEL_SENS); 
-
-
-        // const scaleGyro = (v) => (v / GYRO_SENS);
-        const scaleFactor = 1.0; 
-
-
 
         const out = {
             ECU_time: extract("ECU_time"), 
@@ -191,30 +186,23 @@ useEffect(() => {
             Coolant_temperature: extract("Coolant_temperature"),
             Throttle_position: extract("Throttle_position"), 
             Battery_voltage: extract("Battery_voltage"),
-            
             GPS_Latitude: extract("GPS_Latitude"), 
             GPS_Longitude: extract("GPS_Longitude"), 
             GPS_Speed: extract("GPS_Speed"),
-            
-            // Apply Math for IMU
             Acceleration_on_X_axis: extract("Acceleration_on_X_axis"), 
             Acceleration_on_Y_axis: extract("Acceleration_on_Y_axis"),
             Acceleration_on_Z_axis: extract("Acceleration_on_Z_axis"), 
-            
             Gyroscope_on_X_axis: extract("Gyroscope_on_X_axis"),
             Gyroscope_on_Y_axis: extract("Gyroscope_on_Y_axis"), 
             Gyroscope_on_Z_axis: extract("Gyroscope_on_Z_axis"),
-            
             Brake_Pressure: extract("Brake_Pressure"), 
             Gear: extract("Gear"), 
             Steering_Angle: extract("Steering_Angle"),
             BSPD: extract("BSPD"), 
-            
             Damper_Left_Rear: extract("Damper_Left_Rear"), 
             Damper_Right_Rear: extract("Damper_Right_Rear"),
             Damper_Left_Front: extract("Damper_Left_Front"), 
             Damper_Right_Front: extract("Damper_Right_Front"),
-            
             Air_density_correction: extract("Air_density_correction"), 
             Warmup_correction: extract("Warmup_correction"),
             TPS_based_acceleration: extract("TPS_based_acceleration"), 
@@ -232,14 +220,12 @@ useEffect(() => {
             Acceleration_on_X_axis_KF: extract("Acceleration_on_X_axis_KF"), 
             Acceleration_on_Y_axis_KF: extract("Acceleration_on_Y_axis_KF"),
             Acceleration_on_Z_axis_KF: extract("Acceleration_on_Z_axis_KF"), 
-            
             Gyroscope_on_X_axis_KF: extract("Gyroscope_on_X_axis_KF"),
             Gyroscope_on_Y_axis_KF: extract("Gyroscope_on_Y_axis_KF"), 
             Gyroscope_on_Z_axis_KF: extract("Gyroscope_on_Z_axis_KF"),
             Acceleration_on_X_axis_RAW: extract("Acceleration_on_X_axis_RAW"), 
             Acceleration_on_Y_axis_RAW: extract("Acceleration_on_Y_axis_RAW"),
             Acceleration_on_Z_axis_RAW: extract("Acceleration_on_Z_axis_RAW"), 
-            
             Gyroscope_on_X_axis_RAW: extract("Gyroscope_on_X_axis_RAW"),
             Gyroscope_on_Y_axis_RAW: extract("Gyroscope_on_Y_axis_RAW"), 
             Gyroscope_on_Z_axis_RAW: extract("Gyroscope_on_Z_axis_RAW"),
@@ -248,15 +234,25 @@ useEffect(() => {
         };
         out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
         return out;
-    }
-        if (telemetryData && Object.keys(telemetryData).length > 0) {
-            return telemetryData;
+    }, [rawData, fileData]);
+
+    // 2. Select Source: Use New Parsed Data if available, otherwise use Context Data
+    const allSeries = useMemo(() => {
+        if (parsedData) return parsedData;
+        if (telemetryData && Object.keys(telemetryData).length > 0) return telemetryData;
+        return {};
+    }, [parsedData, telemetryData]);
+
+    // 3. Save to Context (Run ONLY once when new data is parsed)
+    useEffect(() => {
+        if (parsedData && currentSession && currentSession.id) {
+            setTelemetryData(parsedData); 
+            setSessionInfo(currentSession);    
         }
-    }, [rawData, telemetryData]);
+    }, [parsedData, currentSession, setTelemetryData, setSessionInfo]);
 
 // --- REPLACE THIS BLOCK ---
-    const gatesArray = useMemo(() => {
-        // 1. Get Lap Data and a Time Reference (Speed or ECU Time)
+const gatesArray = useMemo(() => {
         const laps = allSeries.Gates_times?.lap_data;
         const timeRef = allSeries.ECU_time || allSeries.GPS_Speed;
 
@@ -361,12 +357,12 @@ useEffect(() => {
 
 
 useEffect(() => {
-        // Check allSeries instead of filtered
-        if (allSeries && Object.keys(allSeries).length > 0) {
+
+        if (rawData && rawData.length > 0 && allSeries && Object.keys(allSeries).length > 0) {
             setTelemetryData(allSeries); 
-            setSessionInfo(currentSession); // <--- CHANGE: session to currentSession
+            setSessionInfo(currentSession);    
         }
-    }, [allSeries, currentSession, setTelemetryData, setSessionInfo]);
+    }, [allSeries, currentSession, rawData, setTelemetryData, setSessionInfo]);
 
     // ==========================================
     // 2. VIEW HELPERS (For Old Render Compatibility)
