@@ -1,4 +1,6 @@
 import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import { TelemetryProvider } from "./store/OfflineDataStoreadge";
+
 import Home from "./Home";
 import Layout from "./Layout";
 import Dashboard from "./pages/Dashboard";
@@ -19,7 +21,7 @@ function App() {
     return (
         // The DriverProvider is fine to keep for UI state (Driver Name, Weight, etc.)
         <DriverProvider>
-            {/* REMOVED: <SocketProvider> - Not needed for MQTT/Zustand */}
+            <TelemetryProvider>
                 <Router>
                     <Routes>
                         <Route path="/" element={<Home />} />
@@ -44,7 +46,7 @@ function App() {
                         <Route path="mqtt-auth" element={<MqttAuth />} />
                     </Routes>
                 </Router>
-            {/* REMOVED: </SocketProvider> */}
+            </TelemetryProvider>
         </DriverProvider>
     );
 }

@@ -46,17 +46,23 @@ export default function Dashboard() {
     const navigate = useNavigate();
     const location = useLocation();
     const { driverData } = useContext(DriverContext);
+    
 
     // ==========================================
     // 1. DATA PREPARATION
     // ==========================================
 
-    const { fileData, session } = location.state || {};
+    const { setTelemetryData, setSessionInfo, telemetryData, sessionInfo } = useTelemetry();
 
-    const rawData = useMemo(() => {
+    const { fileData, session: navSession } = location.state || {};
+
+    // 2. Define Session: Use navigation session (new file) OR context session (old file)
+    const currentSession = navSession || sessionInfo;
+
     
+
+const rawData = useMemo(() => {
         if (fileData && Array.isArray(fileData.rows)) return fileData.rows;
-    
         if (Array.isArray(fileData)) return fileData;
         return [];
     }, [fileData]);
@@ -71,7 +77,6 @@ export default function Dashboard() {
     const [pick, setPick] = useState("");
     const [committed, setCommitted] = useState([]);
 
-    const {setTelemetryData, setSessionInfo}=useTelemetry();
 
     // Safety Check
     useEffect(() => {
@@ -79,12 +84,12 @@ export default function Dashboard() {
     }, [rawData]);
 
     // Fetch Track Assets
-    useEffect(() => {
-        if (!session?.trackId) return;
+useEffect(() => {
+        if (!currentSession?.trackId) return; // <--- CHANGE: session to currentSession
         let isMounted = true;
         const fetchTrackFiles = async () => {
             try {
-                const track = await api.getTrackById(session.trackId);
+                const track = await api.getTrackById(currentSession.trackId); // <--- CHANGE
                 const [gatesBlob, layoutBlob] = await Promise.all([
                     api.downloadFile(track.gates),
                     api.downloadFile(track.coordinates)
@@ -101,7 +106,7 @@ export default function Dashboard() {
         };
         fetchTrackFiles();
         return () => { isMounted = false; };
-    }, [session?.trackId]);
+    }, [currentSession?.trackId]);
 
     // ---------- DATA PARSING & CONVERSION ----------
     const allSeries = useMemo(() => {
@@ -109,6 +114,7 @@ export default function Dashboard() {
 
         // Helper to extract and scale data
         // targetKey: Dashboard Name, sourceKey: CSV Column Name, scaleFn: Math function
+        if (rawData && rawData.length > 0) {
         const extract = (targetKey, scaleFn = (v) => v) => {
             const keyMap = {
                 "RPM": "rpm", "Throttle_position": "throttlePosition", "Battery_voltage": "batteryVoltage",
@@ -242,22 +248,61 @@ export default function Dashboard() {
         };
         out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
         return out;
-    }, [rawData]);
+    }
+        if (telemetryData && Object.keys(telemetryData).length > 0) {
+            return telemetryData;
+        }
+    }, [rawData, telemetryData]);
 
+// --- REPLACE THIS BLOCK ---
     const gatesArray = useMemo(() => {
-        // Access the raw Gates_times from the full series
-        const gates = allSeries.Gates_times;
-        
-        // Safety check
-        if (!gates || !Array.isArray(gates.lap_data)) return [];
+        // 1. Get Lap Data and a Time Reference (Speed or ECU Time)
+        const laps = allSeries.Gates_times?.lap_data;
+        const timeRef = allSeries.ECU_time || allSeries.GPS_Speed;
 
-        return gates.lap_data.map((lap, index) => ({
-            label: `Lap ${index + 1}`,
-            index: index,
-            // Ensure we have valid start/end times in seconds
-            startTime: lap.S0, 
-            endTime: lap.S3 || lap.ts // S3 is finish line, ts is backup
-        })).filter(l => l.startTime && l.endTime);
+        // Safety checks
+        if (!laps || !timeRef || timeRef.length === 0) return [];
+
+        const segments = [];
+        
+        // 2. Get absolute session start/end
+        const sessionStart = timeRef[0][0]; 
+        const sessionEnd = timeRef[timeRef.length - 1][0];
+
+        // 3. Add "Pre-Session / Out Lap" (Data before Lap 1)
+        const firstLapStart = laps[0]?.S0;
+        if (firstLapStart && firstLapStart > sessionStart) {
+            segments.push({
+                label: "Pre-Session / Out Lap",
+                startTime: sessionStart,
+                endTime: firstLapStart
+            });
+        }
+
+        // 4. Add Actual Laps
+        laps.forEach((lap, index) => {
+            segments.push({
+                label: `Lap ${index + 1}`,
+                startTime: lap.S0,
+                endTime: lap.S3 || lap.ts
+            });
+        });
+
+        // 5. Add "Post-Session / In Lap" (Data after last lap)
+        const lastLap = laps[laps.length - 1];
+        const lastLapEnd = lastLap?.S3 || lastLap?.ts;
+
+        if (lastLapEnd && sessionEnd > lastLapEnd) {
+            segments.push({
+                label: "Post-Session / In Lap",
+                startTime: lastLapEnd,
+                endTime: sessionEnd
+            });
+        }
+
+        // 6. Map to standard format with index
+        return segments.map((seg, i) => ({ ...seg, index: i }));
+
     }, [allSeries]);
 
     // ---------- FILTERING ----------
@@ -315,12 +360,13 @@ export default function Dashboard() {
     }, [allSeries, selectedLap, selectedTs, gatesArray]);
 
 
-    useEffect(() => {
-        if (filtered && Object.keys(filtered).length > 0) {
-            setTelemetryData(filtered); // Save filtered arrays to global storage
-            setSessionInfo(session);    // Save session metadata
+useEffect(() => {
+        // Check allSeries instead of filtered
+        if (allSeries && Object.keys(allSeries).length > 0) {
+            setTelemetryData(allSeries); 
+            setSessionInfo(currentSession); // <--- CHANGE: session to currentSession
         }
-    }, [filtered, session, setTelemetryData, setSessionInfo]);
+    }, [allSeries, currentSession, setTelemetryData, setSessionInfo]);
 
     // ==========================================
     // 2. VIEW HELPERS (For Old Render Compatibility)
@@ -455,7 +501,7 @@ const speedVsDistance = useMemo(() => {
             <div className="rounded-lg bg-white p-4 shadow space-y-2">
                 <h3 className="font-medium text-gray-700">Choose Timestamp</h3>
                 <TimestampSelect 
-                    sessionId={session?.id} 
+                    sessionId={currentSession?.id} 
                     onSelect={(ts) => {
                         setSelectedTs(ts);
                         setSelectedLap(null); // <--- Auto-reset lap selection when changing stint

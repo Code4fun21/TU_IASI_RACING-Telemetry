@@ -72,6 +72,24 @@ class KalmanFilter2D {
     }
 }
 
+class LowPassFilter {
+    currentValue: number | null = null;
+    alpha: number;
+
+    constructor(alpha: number = 0.15) { 
+        this.alpha = alpha; 
+    }
+
+    filter(measurement: number): number {
+        if (this.currentValue === null) {
+            this.currentValue = measurement;
+            return measurement;
+        }
+        this.currentValue = this.currentValue + this.alpha * (measurement - this.currentValue);
+        return this.currentValue;
+    }
+}
+
 // ==========================================
 // 2. LAP TIMING ALGORITHMS
 // ==========================================
@@ -258,7 +276,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 
 export class CANDecoder {
     // Dynamic Filter Storage
-    filters: Record<string, KalmanFilter2D> = {}; 
+    filtersLPF: Record<string, LowPassFilter> = {};
+    filtersKalman: Record<string, KalmanFilter2D> = {};
 
     ACCEL_SENS: number;
     GYRO_SENS: number;
@@ -384,14 +403,31 @@ export class CANDecoder {
                             finalVal = this.convertMethod2(rawVal, 1);
                             break;
                         case "Method_IMU_Acc":
-                            finalVal = (rawVal / this.ACCEL_SENS) * 9.80665;
-                            finalVal = this.handleImuBias(sig.name, finalVal);
-                            finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                            // 1. Calculate Base Value (In G-Units, not m/s²)
+                            // Removed * 9.80665 to fix the "0.0001" scaling issue
+                            let baseAcc = (rawVal / this.ACCEL_SENS); 
+                            baseAcc = this.handleImuBias(sig.name, baseAcc);
+
+                            // 2. Standard Path (LPF) -> Goes to 'accelerationX'
+                            finalVal = this.applyLPF(sig.name, baseAcc);
+
+                            // 3. Secondary Path (Kalman) -> Goes to 'accelerationX_KF'
+                            const kfAcc = this.applyKalman(sig.name, baseAcc, timestamp);
+                            decodedValues[sig.name + "_KF"] = Number(kfAcc.toFixed(6));
+                            decodedValues[sig.name + "_RAW"] = Number(baseAcc);
                             break;
+
                         case "Method_IMU_Gyro":
-                            finalVal = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
-                            finalVal = this.handleImuBias(sig.name, finalVal);
-                            finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                            // 1. Calculate Base Value (Radians/s)
+                            let baseGyro = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
+                            baseGyro = this.handleImuBias(sig.name, baseGyro);
+
+                            // 2. Standard Path (LPF) -> Goes to 'gyroX'
+                            finalVal = this.applyLPF(sig.name, baseGyro);
+
+                            // 3. Secondary Path (Kalman) -> Goes to 'gyroX_KF'
+                            const kfGyro = this.applyKalman(sig.name, baseGyro, timestamp);
+                            decodedValues[sig.name + "_KF"] = Number(kfGyro.toFixed(6));
                             break;
                     }
                 } else {
@@ -443,9 +479,21 @@ export class CANDecoder {
     }
 
     handleImuBias(name: string, val: number): number {
+        // 1. If bias is already calculated, use it
         if (this.imuBias[name] !== undefined) {
             return val - this.imuBias[name];
         }
+
+        // 2. SAFETY CHECK: Only calibrate if car is stopped!
+        // We use the last known speed. If speed is missing/null, assume stopped (0).
+        const speed = this.currPos ? this.currPos.speed : 0;
+        
+        if (speed > 5.0) {
+            // Car is moving, DO NOT collect samples. Return raw value.
+            return val; 
+        }
+
+        // 3. Collect samples (only when stopped)
         if (!this.imuBuffer[name]) this.imuBuffer[name] = [];
         
         if (this.imuBuffer[name].length < this.imuBiasSamples) {
@@ -454,15 +502,21 @@ export class CANDecoder {
         } else if (this.imuBuffer[name].length === this.imuBiasSamples) {
             const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
             this.imuBias[name] = sum / this.imuBiasSamples;
+            
+            // Special handling for Z-Accel (Gravity = 1.0)
+            if (name.includes("accelerationZ")) {
+                this.imuBias[name] -= 1.0; 
+            }
+            
+            console.log(`Calibrated ${name}: Bias = ${this.imuBias[name].toFixed(4)}`);
             return val - this.imuBias[name];
         }
         return val;
     }
-
     // --- NEW: LAZY LOADING APPLY KALMAN ---
     applyKalman(name: string, val: number, timestamp: number): number {
         // If filter doesn't exist, create it on-the-fly
-        if (!this.filters[name]) {
+        if (!this.filtersKalman[name]) {
             console.log(`Decoder: Initializing new Kalman Filter for '${name}'`);
 
             // Default Tuning
@@ -475,10 +529,17 @@ export class CANDecoder {
                 R = 0.1; // More trust in sensor for IMU
             }
 
-            this.filters[name] = new KalmanFilter2D(Q, R);
+            this.filtersKalman[name] = new KalmanFilter2D(Q, R);
         }
 
-        return this.filters[name].filter(val, timestamp);
+        return this.filtersKalman[name].filter(val, timestamp);
+    }
+
+    applyLPF(name: string, val: number): number {
+        if (!this.filtersLPF[name]) {
+            this.filtersLPF[name] = new LowPassFilter(0.15); // Alpha 0.15 = Smooth charts
+        }
+        return this.filtersLPF[name].filter(val);
     }
 
     // --- LAP LOGIC ---

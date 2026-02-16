@@ -187,17 +187,32 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       xMin = minTs - pad; xMax = maxTs + pad;
     }
 
-    const yAxis = ready.map((s, i) => ({
-      type: "value",
-      name: s.name,
-      position: i === 0 ? "left" : "right",
-      offset: i >= 2 ? (i - 1) * 60 : 0,
-      axisLine: { show: true, lineStyle: { color: COLORS[i % COLORS.length] } },
-      axisLabel: { formatter: `{value} ${s.unit || ""}` },
-      splitLine: { show: i === 0 }, // Only one grid
-    }));
+    const yAxis = ready.map((s, i) => {
+      // 1. FIX ZOOM PROBLEM: Smart Scaling based on Unit
+      // This prevents the chart from auto-zooming into 0.001 noise on straights.
+      let min = undefined; // Auto
+      let max = undefined; // Auto
+      
+      if (s.unit === 'G') {
+          min = -2.5; max = 2.5; 
+      } else if (s.unit === 'rad/s') {
+          min = -10.0; max = 10.0;
+      }
 
-    const seriesOpts = ready.map((s, i) => ({
+      return {
+        type: "value",
+        name: s.name,
+        min: min, // Apply fixed scale
+        max: max, // Apply fixed scale
+        position: i === 0 ? "left" : "right",
+        offset: i >= 2 ? (i - 1) * 60 : 0,
+        axisLine: { show: true, lineStyle: { color: COLORS[i % COLORS.length] } },
+        axisLabel: { formatter: `{value} ${s.unit || ""}` },
+        splitLine: { show: i === 0 },
+      };
+    });
+
+const seriesOpts = ready.map((s, i) => ({
       name: s.name,
       yAxisIndex: i,
       type: "line",
@@ -205,9 +220,11 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       emphasis: { focus: "series" },
       lineStyle: { color: COLORS[i % COLORS.length], width: 2 },
       showSymbol: false,
-      sampling: "lttb",
+      
+      // 2. FIX SHAPE PROBLEM: Better Smoothing settings
+      sampling: "average", // 'lttb' preserves spikes. 'average' smooths them out.
       connectNulls: true,
-      smooth: 0.2,
+      smooth: 0.35,        // Increased from 0.2 for cleaner curves
     }));
 
     // Data Zoom
@@ -220,18 +237,19 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
         ];
     }
 
-    return {
+ return {
       color: COLORS,
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
+        valueFormatter: (value) => value !== null ? value.toFixed(3) : 'No Data',
         formatter: (params) => {
           if (!Array.isArray(params) || !params.length) return "";
           const ts = params[0]?.value?.[0];
           let out = `<b>${fmtMs(ts)}</b><br/>`;
           params.forEach((p) => {
             const unit = ready[p.seriesIndex]?.unit ?? "";
-            const val = p.value && p.value[1] != null ? Number(p.value[1]).toFixed(2) : "--";
+            const val = p.value && p.value[1] != null ? Number(p.value[1]).toFixed(3) : "--";
             out += `<span style="color:${p.color}">●</span> ${p.seriesName}: ${val} ${unit}<br/>`;
           });
           return out;
@@ -245,14 +263,14 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       },
       xAxis: { 
           type: "time", 
-          min: xMin, 
-          max: xMax, 
+          min: xMin,
+          max: xMax,
           boundaryGap: false, 
           axisLabel: { hideOverlap: true, formatter: (v) => fmtMs(v) } 
       },
       yAxis,
       series: seriesOpts,
-      dataZoom,
+      dataZoom ,
       animation: false,
     };
   }, [ready, windowMs]);
