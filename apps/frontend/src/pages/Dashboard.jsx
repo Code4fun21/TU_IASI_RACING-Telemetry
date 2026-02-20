@@ -31,6 +31,103 @@ const readBlobAsText = (blob) => {
     });
 };
 
+export class ButterworthProcessor {
+    constructor() {
+        this.coeffs = null;
+    }
+
+    setConfiguration(fs, fc) {
+        const safeFc = Math.min(fc, (fs / 2) * 0.9); // Rule: Nyquist safety margin
+        const oh = Math.tan(Math.PI * safeFc / fs);
+        const oh2 = oh * oh;
+        const sn = Math.sqrt(2.0);
+        const a0 = 1 + sn * oh + oh2;
+        
+        this.coeffs = {
+            a: [1, 2 * (oh2 - 1) / a0, (1 - sn * oh + oh2) / a0],
+            b: [oh2 / a0, 2 * (oh2 / a0), oh2 / a0]
+        };
+    }
+
+    applyFilter(input) {
+        const { a, b } = this.coeffs;
+        const len = input.length;
+        const output = new Array(len);
+
+        // Rule: Start-Up Transient Fix (Padding)
+        // We initialize the filter's "memory" with the first value
+        // to prevent the math from starting at zero.
+        let x1 = input[0], x2 = input[0];
+        let y1 = input[0], y2 = input[0];
+
+        for (let i = 0; i < len; i++) {
+            output[i] = (b[0] * input[i]) + (b[1] * x1) + (b[2] * x2)
+                        - (a[1] * y1) - (a[2] * y2);
+            
+            // Shift memory
+            x2 = x1; x1 = input[i];
+            y2 = y1; y1 = output[i];
+        }
+        return output;
+    }
+
+    filtFilt(data, fs, fc) {
+        if (!data || data.length < 30) return data;
+        this.setConfiguration(fs, fc);
+
+        // Rule: Pad BOTH ends to prevent start/end spikes
+        const padFront = new Array(15).fill(data[0]);
+        const padBack = new Array(15).fill(data[data.length - 1]);
+        const paddedData = [...padFront, ...data, ...padBack];
+
+        // Forward Pass -> Reverse -> Backward Pass -> Final Reverse
+        let result = this.applyFilter(paddedData);
+        result.reverse();
+        result = this.applyFilter(result);
+        const final = result.reverse();
+        
+        // Trim BOTH pads off before returning
+        return final.slice(15, final.length - 15);
+    }
+}
+
+
+class TelemetryProcessor {
+    constructor() {
+        this.bw = new ButterworthProcessor();
+    }
+
+    // Rule 1: Centripetal Correction with Unit Conversion
+    // yawRate: deg/s, velocity: km/h
+    removeCentripetal(ayMeasured, yawRateDeg, velocityKmh) {
+        const yawRateRad = yawRateDeg * (Math.PI / 180);
+        const velocityMs = velocityKmh / 3.6;
+        const centripetalG = (yawRateRad * velocityMs) / 9.80665;
+        return ayMeasured - centripetalG;
+    }
+
+        // Rule 2: Adaptive G-Gate (Sliding StdDev)
+    getAdaptiveFc(values, baseFc) {
+        if (values.length < 50) return baseFc;
+
+        // Calculate Variance of the first few seconds of the signal (or a sample)
+        const sample = values.slice(0, 100); 
+        const mean = sample.reduce((a, b) => a + b, 0) / sample.length;
+        const variance = sample.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / sample.length;
+        const stdDev = Math.sqrt(variance);
+
+        // If the data is generally noisy (Standard Deviation > 0.15G), 
+        // drop the cutoff to 3Hz to prevent the "fuzzy" lines.
+        return stdDev > 0.15 ? 3.0 : baseFc;
+    }
+
+    // Rule 3: Gravity Compensation (Roll Gradient Approximation)
+    // rollGradient: degrees of body roll per 1G of lateral force
+    compensateRoll(ayMeasured, azMeasured, rollGradient = 3.5) {
+        const phi = (ayMeasured * rollGradient) * (Math.PI / 180); // Radian roll
+        return (ayMeasured * Math.cos(phi)) - (azMeasured * Math.sin(phi));
+    }
+}
 const haversine = (lat1, lon1, lat2, lon2) => {
     const toRad = (deg) => (deg * Math.PI) / 180;
     const R = 6371;
@@ -232,6 +329,70 @@ useEffect(() => {
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
+        // --- Inside your allSeries useMemo ---
+        const tp = new TelemetryProcessor();
+
+        // 1. Setup Alignment & Jitter Correction
+        const accelSeries = out["Acceleration_on_X_axis_KF"] || [];
+        const gpsSeries = out["GPS_Speed"] || [];
+
+        let fs = 20; // Default fallback
+        if (accelSeries.length > 1) {
+            let tsDiff = accelSeries[accelSeries.length - 1][0] - accelSeries[0][0];
+            
+            // Auto-detect if timestamps are milliseconds (e.g., 840,000) or seconds (e.g., 840)
+            let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
+            
+            fs = accelSeries.length / durationSeconds;
+            
+            // Ultimate safety net: If math goes crazy, force it back to 20Hz
+            if (fs < 5 || fs > 500) fs = 20; 
+}
+
+        const correctedAx = [];
+        const correctedAy = [];
+
+        // 2. Linear Interpolation Helper for GPS Speed
+        const getInterpolatedSpeed = (targetTs) => {
+            if (gpsSeries.length === 0) return 0;
+            const nextIdx = gpsSeries.findIndex(p => p[0] >= targetTs);
+            if (nextIdx <= 0) return gpsSeries[0]?.[1] || 0;
+            
+            const p1 = gpsSeries[nextIdx - 1];
+            const p2 = gpsSeries[nextIdx];
+            const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
+            return p1[1] + tRatio * (p2[1] - p1[1]);
+        };
+
+        // 3. The Combined Processing Loop
+        for (let i = 0; i < accelSeries.length; i++) {
+            const [ts, axRaw] = accelSeries[i];
+            const ayRaw = out["Acceleration_on_Y_axis_KF"]?.[i]?.[1] || 0;
+            const azRaw = out["Acceleration_on_Z_axis_KF"]?.[i]?.[1] || 1; // Default 1G
+            // Change "gyroZ" to the correct key
+            const gzRaw = out["Gyroscope_on_Z_axis_KF"]?.[i]?.[1] || 0;
+            
+            // Rule 4: Get speed aligned exactly to MPU timestamp
+            const speed = getInterpolatedSpeed(ts);
+
+            // Rule 1: Centripetal Correction
+            let ayClean = tp.removeCentripetal(ayRaw, gzRaw, speed);
+
+            // Rule 3: Roll Compensation
+            const ayCorrected = tp.compensateRoll(ayClean, azRaw, 3.0); // Assume 3 deg/G roll gradient
+
+            correctedAx.push(axRaw);
+            correctedAy.push(ayCorrected);
+        }
+
+        // 4. Rule 2: Adaptive Final Pass
+        const fcX = tp.getAdaptiveFc(correctedAx, 5);
+        const finalAx = tp.bw.filtFilt(correctedAx, fs, fcX);
+        const finalAy = tp.bw.filtFilt(correctedAy, fs, 5);
+
+        // 5. Map back
+        out["Acceleration_on_X_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAx[i]]);
+        out["Acceleration_on_Y_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAy[i]]);
         out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
         return out;
     }, [rawData, fileData]);

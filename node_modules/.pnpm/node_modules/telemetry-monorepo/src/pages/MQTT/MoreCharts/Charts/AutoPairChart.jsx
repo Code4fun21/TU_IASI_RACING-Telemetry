@@ -212,7 +212,7 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       };
     });
 
-const seriesOpts = ready.map((s, i) => ({
+    const seriesOpts = ready.map((s, i) => ({
       name: s.name,
       yAxisIndex: i,
       type: "line",
@@ -225,6 +225,24 @@ const seriesOpts = ready.map((s, i) => ({
       sampling: "average", // 'lttb' preserves spikes. 'average' smooths them out.
       connectNulls: true,
       smooth: 0.35,        // Increased from 0.2 for cleaner curves
+
+      // --- ADDED MARKPOINT FOR MIN/MAX ---
+      markPoint: {
+        symbol: 'pin',
+        symbolSize: 40,
+        label: {
+            show: true,
+            fontSize: 10,
+            formatter: '{c}'
+        },
+        itemStyle: {
+            color: COLORS[i % COLORS.length]
+        },
+        data: [
+          { type: 'max', name: 'Max' },
+          { type: 'min', name: 'Min' }
+        ]
+      }
     }));
 
     // Data Zoom

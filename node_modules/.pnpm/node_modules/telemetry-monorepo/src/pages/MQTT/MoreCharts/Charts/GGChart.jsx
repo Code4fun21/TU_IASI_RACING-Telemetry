@@ -35,7 +35,11 @@ const GGChart = ({ data, height = 400 }) => {
         }]
     };
 
-    return <ReactECharts option={options} style={{ height: height, width: "100%" }} />;
+    // CHANGE THIS:
+// return <ReactECharts option={options} style={{ height: height, width: "100%" }} />;
+
+// TO THIS:
+return <ReactECharts option={options} style={{ height: height, width: height, margin: "0 auto" }} />;
 };
 
 

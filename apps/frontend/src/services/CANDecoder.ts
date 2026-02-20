@@ -90,6 +90,48 @@ class LowPassFilter {
     }
 }
 
+class HampelFilter {
+    windowSize: number;
+    threshold: number; // Usually 3 (3-sigma rule)
+    buffer: number[] = [];
+    PHYSICAL_IMPOSSIBILITY_LIMIT = 5.0;
+
+    constructor(windowSize: number = 7, threshold: number = 3) {
+        this.windowSize = windowSize;
+        this.threshold = threshold;
+    }
+
+    filter(measurement: number): number {
+        this.buffer.push(measurement);
+        if (this.buffer.length > this.windowSize) {
+            this.buffer.shift();
+        }
+
+        if (this.buffer.length < this.windowSize) {
+            return measurement;
+        }
+
+        // Calculate Median
+        const sorted = [...this.buffer].sort((a, b) => a - b);
+        const median = sorted[Math.floor(this.windowSize / 2)];
+
+        // Calculate Median Absolute Deviation (MAD)
+        const deviations = this.buffer.map(val => Math.abs(val - median));
+        const sortedDeviations = [...deviations].sort((a, b) => a - b);
+        const mad = sortedDeviations[Math.floor(this.windowSize / 2)];
+
+        // Standard Deviation estimate
+        const sigma = mad * 1.4826;
+        const diff = Math.abs(measurement - median);
+        // If current value is an outlier, replace it with the median
+        if (diff > this.threshold * sigma&&diff>this.PHYSICAL_IMPOSSIBILITY_LIMIT) {
+            return median;
+        }
+
+        return measurement;
+    }
+}
+
 // ==========================================
 // 2. LAP TIMING ALGORITHMS
 // ==========================================
@@ -225,16 +267,16 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "GPS_Longitude", offset: 3, size: 3, method: "Method2_Lon" },
         { name: "GPS_Speed",     offset: 6, size: 1, multiply: 1 } 
     ],
-    "0118": [
-        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc" },
-        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc" },
-        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc" }
-    ],
-    "0119": [
-        { name: "gyroX", offset: 0, size: 2, method: "Method_IMU_Gyro" },
-        { name: "gyroY", offset: 2, size: 2, method: "Method_IMU_Gyro" },
-        { name: "gyroZ", offset: 4, size: 2, method: "Method_IMU_Gyro" }
-    ],
+   "0118": [
+    { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true },
+    { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true },
+    { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true }
+],
+"0119": [
+    { name: "gyroX", offset: 0, size: 2, method: "Method_IMU_Gyro", isSigned: true },
+    { name: "gyroY", offset: 2, size: 2, method: "Method_IMU_Gyro", isSigned: true },
+    { name: "gyroZ", offset: 4, size: 2, method: "Method_IMU_Gyro", isSigned: true }
+],
 
     // MEGASQUIRT
     "05F0": [{ name: "rpm", offset: 6, size: 2 }],
@@ -277,6 +319,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 export class CANDecoder {
     // Dynamic Filter Storage
     filtersLPF: Record<string, LowPassFilter> = {};
+    filtersHampel: Record<string, HampelFilter> = {};
     filtersKalman: Record<string, KalmanFilter2D> = {};
 
     ACCEL_SENS: number;
@@ -407,13 +450,16 @@ export class CANDecoder {
                             // Removed * 9.80665 to fix the "0.0001" scaling issue
                             let baseAcc = (rawVal / this.ACCEL_SENS); 
                             baseAcc = this.handleImuBias(sig.name, baseAcc);
+                            
+                            const hampelAcc = this.applyHampel(sig.name, baseAcc, 3, 4);                           
+                            decodedValues[sig.name + "_KF"] = Number(hampelAcc.toFixed(6));
 
                             // 2. Standard Path (LPF) -> Goes to 'accelerationX'
                             finalVal = this.applyLPF(sig.name, baseAcc);
 
                             // 3. Secondary Path (Kalman) -> Goes to 'accelerationX_KF'
                             const kfAcc = this.applyKalman(sig.name, baseAcc, timestamp);
-                            decodedValues[sig.name + "_KF"] = Number(kfAcc.toFixed(6));
+                            // decodedValues[sig.name + "_KF"] = Number(kfAcc.toFixed(6));
                             decodedValues[sig.name + "_RAW"] = Number(baseAcc);
                             break;
 
@@ -421,13 +467,15 @@ export class CANDecoder {
                             // 1. Calculate Base Value (Radians/s)
                             let baseGyro = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
                             baseGyro = this.handleImuBias(sig.name, baseGyro);
-
+                            const hampelGyro = this.applyHampel(sig.name, baseGyro, 2, 5);                           
+                            decodedValues[sig.name + "_KF"] = Number(hampelGyro.toFixed(6));
                             // 2. Standard Path (LPF) -> Goes to 'gyroX'
                             finalVal = this.applyLPF(sig.name, baseGyro);
 
                             // 3. Secondary Path (Kalman) -> Goes to 'gyroX_KF'
                             const kfGyro = this.applyKalman(sig.name, baseGyro, timestamp);
-                            decodedValues[sig.name + "_KF"] = Number(kfGyro.toFixed(6));
+                            // decodedValues[sig.name + "_KF"] = Number(kfGyro.toFixed(6));
+                            decodedValues[sig.name + "_RAW"] = Number(baseGyro);
                             break;
                     }
                 } else {
@@ -500,17 +548,16 @@ export class CANDecoder {
             this.imuBuffer[name].push(val);
             return val; 
         } else if (this.imuBuffer[name].length === this.imuBiasSamples) {
-            const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
-            this.imuBias[name] = sum / this.imuBiasSamples;
-            
-            // Special handling for Z-Accel (Gravity = 1.0)
-            if (name.includes("accelerationZ")) {
-                this.imuBias[name] -= 1.0; 
-            }
-            
-            console.log(`Calibrated ${name}: Bias = ${this.imuBias[name].toFixed(4)}`);
-            return val - this.imuBias[name];
+        const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
+        this.imuBias[name] = sum / this.imuBiasSamples;
+        
+        // FIX: Subtract 1.0 from Y, because Y is pointing at the ground
+        if (name.includes("accelerationZ")) {
+            this.imuBias[name] -= 1.0; 
         }
+        
+        return val - this.imuBias[name];
+    }
         return val;
     }
     // --- NEW: LAZY LOADING APPLY KALMAN ---
@@ -541,6 +588,14 @@ export class CANDecoder {
         }
         return this.filtersLPF[name].filter(val);
     }
+
+    applyHampel(name: string, val: number, windowSize: number = 10, threshold: number = 3): number {
+            if (!this.filtersHampel[name]) {
+                this.filtersHampel[name] = new HampelFilter(windowSize, threshold);
+            }
+            return this.filtersHampel[name].filter(val);
+    }    
+
 
     // --- LAP LOGIC ---
     checkCross(time: number, curr: GPSPoint) {
