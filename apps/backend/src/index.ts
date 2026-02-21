@@ -33,6 +33,29 @@ app.post('/api/upload',
   }
 );
 
+// 3. TRACKS (Update existing)
+app.put('/api/tracks/:id', usageGuardMiddleware('d1_writes'), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  
+  // Validate the data against your shared schema
+  const result = TrackSchema.safeParse(body);
+  if (!result.success) return c.json({ error: result.error }, 400);
+
+  const track = result.data;
+
+  // This updates the filenames in D1 that point to the actual files in R2
+  await c.env.DB.prepare(`
+    UPDATE Track 
+    SET name = ?, gates = ?, coordinates = ? 
+    WHERE id = ?
+  `)
+  .bind(track.name, track.gates, track.coordinates, id)
+  .run();
+
+  return c.json({ success: true });
+});
+
 // DOWNLOAD (Class B Op)
 app.get('/api/download/:filename', 
   usageGuardMiddleware('r2_downloads'), // <--- NEW PROTECTION

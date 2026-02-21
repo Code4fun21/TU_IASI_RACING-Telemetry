@@ -185,7 +185,7 @@ const MapChart = ({
           left: "center",
           top: "middle",
           label: { show: false },
-          itemStyle: { areaColor: "#eee", borderColor: "#444" },
+          itemStyle: { areaColor: "#eee", borderColor: "#000", borderWidth: 0.7 },
           emphasis: { itemStyle: { areaColor: "#ccc" } },
         },
         visualMap: {

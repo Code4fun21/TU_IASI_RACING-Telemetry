@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState,useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { api } from '../services/api'; 
 import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
-import MapChart from "../components/MapChart"; 
+import MapChartEditable from '../components/MapChartEditable';
 
 // --- Types & Interfaces ---
 
@@ -60,10 +60,13 @@ export default function UploadPage() {
   const [trackName, setTrackName] = useState<string>("");
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
   const [gatesFile, setGatesFile] = useState<File | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [existingTracks, setExistingTracks] = useState<any[]>([]); // To hold list of tracks
 
   // --- PREVIEW & EDIT STATE ---
   const [previewLayout, setPreviewLayout] = useState<any>(null);
   const [previewGates, setPreviewGates] = useState<Gate[]>([]);
+  const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   
   // Form state for manual entry
   const [newGate, setNewGate] = useState<NewGateForm>({ 
@@ -206,24 +209,72 @@ export default function UploadPage() {
       }
   };
 
+  const handleEditExistingTrack = async (selectedTrackId: number) => {
+    try {
+        setUploading(true);
+        const track = await api.getTrackById(selectedTrackId); 
+
+        if (!track || !track.coordinates || !track.gates) {
+            alert("This track configuration is missing required layout or gates files.");
+            return;
+        }
+
+        // --- NEW: Set ID and Enter Edit Mode ---
+        setSelectedTrackId(selectedTrackId);
+        setTrackName(track.name || "");
+        
+        const layoutBlob = await api.downloadFile(track.coordinates);
+        const gatesBlob = await api.downloadFile(track.gates);
+
+        setPreviewLayout(JSON.parse(await layoutBlob.text()));
+        setPreviewGates(JSON.parse(await gatesBlob.text()));
+        
+        setIsEditMode(false); 
+    } catch (err: any) {
+        alert("Error loading existing track: " + err.message);
+    } finally {
+        setUploading(false);
+    }
+};
+
+// Function to open the selection menu and fetch track list
+const openTrackSelector = async () => {
+    // REPLACE THIS: Line to get all tracks for the dropdown
+    const tracks = await api.getTracks(); 
+    setExistingTracks(tracks);
+    setIsEditMode(true);
+};
+
   // Gate Editing (Manual Form)
   const handleAddGate = (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      const gate: Gate = {
-          name: newGate.name || `S${previewGates.length}`,
-          lat1: Number(newGate.lat1),
-          lon1: Number(newGate.lon1),
-          lat2: Number(newGate.lat2),
-          lon2: Number(newGate.lon2),
-      };
-      
-      if (isNaN(gate.lat1) || isNaN(gate.lon1) || isNaN(gate.lat2) || isNaN(gate.lon2)) {
-          alert("Invalid coordinates");
-          return;
-      }
-      
-      setPreviewGates([...previewGates, gate]);
-      setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+  e.preventDefault();
+
+  const gate: Gate = {
+    name: newGate.name || `G${previewGates.length + 1}`,
+    lat1: Number(newGate.lat1),
+    lon1: Number(newGate.lon1),
+    lat2: Number(newGate.lat2),
+    lon2: Number(newGate.lon2),
+  };
+
+  // Validation: Ensure all 4 coordinates are valid numbers
+  if ([gate.lat1, gate.lon1, gate.lat2, gate.lon2].some(n => isNaN(n))) {
+    alert("Please provide both points by clicking the map or entering manually.");
+    return;
+  }
+
+
+  setPreviewGates([...previewGates, gate]);
+
+  // Reset the form for the next gate
+  setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+};
+
+
+  const handleClearForm = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+    setGateStart(null); // Resets the map click sequence
   };
 
   const handleDeleteGate = (index: number) => {
@@ -235,71 +286,110 @@ export default function UploadPage() {
   // 3. MAP INTERACTION (Visual Gate Creator)
   // ==========================
 
-  const handleMapClick = (coords: Coordinate | any) => {
-    // Coords come from MapChart as { lat, lon }
-    if (!coords || typeof coords.lat !== 'number' || typeof coords.lon !== 'number') return;
 
-    if (!gateStart) {
-        // FIRST CLICK: Set start point. (Rubber band will be drawn by MapChart)
-        setGateStart({ lat: coords.lat, lon: coords.lon });
-    } else {
-        // SECOND CLICK: Finalize the gate
-        const newGateObj: Gate = {
-            name: `G${previewGates.length + 1}`,
-            lat1: gateStart.lat,
-            lon1: gateStart.lon,
-            lat2: coords.lat,
-            lon2: coords.lon,
-        };
-        
-        setPreviewGates([...previewGates, newGateObj]);
-        
-        // Reset drawing state
-        setGateStart(null);
+const activeDrawingGate = useMemo(() => {
+  if (!newGate.lat1 || !newGate.lon1) return [];
+  
+  return [{
+    name: "New Point",
+    lat1: Number(newGate.lat1),
+    lon1: Number(newGate.lon1),
+    // Use Lat1 as Lat2 if the second point isn't clicked yet so it shows as a dot
+    lat2: newGate.lat2 ? Number(newGate.lat2) : Number(newGate.lat1),
+    lon2: newGate.lon2 ? Number(newGate.lon2) : Number(newGate.lon1),
+    isPreview: true
+  }];
+}, [newGate]);
+
+const handleMapClick = (coords: Coordinate) => {
+  // We use a functional update to ensure we have the latest 'newGate' state
+  setNewGate((prev) => {
+    // If Lat 1 is empty, fill point 1
+    if (!prev.lat1) {
+      return {
+        ...prev,
+        lat1: coords.lat.toString(),
+        lon1: coords.lon.toString(),
+      };
+    } 
+    // If Lat 1 is full but Lat 2 is empty, fill point 2
+    if (!prev.lat2) {
+      return {
+        ...prev,
+        lat2: coords.lat.toString(),
+        lon2: coords.lon.toString(),
+      };
     }
-  };
+    // If both are full, overwrite point 2 (or you could reset and start over)
+    return {
+      ...prev,
+      lat2: coords.lat.toString(),
+      lon2: coords.lon.toString(),
+    };
+  });
+};
+
+// --- Add logic for Right-Click Delete ---
+const handleGateDelete = (index: number) => {
+  const updated = previewGates.filter((_, i) => i !== index);
+  setPreviewGates(updated);
+};
 
   const handleSaveTrack = async () => {
     if (!trackName || !previewLayout) {
-      alert("Track Name and Layout are required.");
-      return;
+        alert("Track Name and Layout are required.");
+        return;
     }
     setUploading(true);
 
     try {
-      // 1. Convert Current State to Files
-      const layoutBlob = new Blob([JSON.stringify(previewLayout)], { type: "application/json" });
-      const gatesBlob = new Blob([JSON.stringify(previewGates)], { type: "application/json" });
-      
-      const finalLayoutFile = new File([layoutBlob], layoutFile ? layoutFile.name : `${trackName}_layout.json`);
-      const finalGatesFile = new File([gatesBlob], gatesFile ? gatesFile.name : `${trackName}_gates.json`);
+        // 1. Convert current UI state (Map + Gates) into JSON Files
+        const layoutBlob = new Blob([JSON.stringify(previewLayout)], { type: "application/json" });
+        const gatesBlob = new Blob([JSON.stringify(previewGates)], { type: "application/json" });
+        
+        const finalLayoutFile = new File([layoutBlob], `${trackName}_layout.json`);
+        const finalGatesFile = new File([gatesBlob], `${trackName}_gates.json`);
 
-      // 2. Upload to R2
-      const storedLayoutName = await api.uploadFile(finalLayoutFile);
-      const storedGatesName = await api.uploadFile(finalGatesFile);
+        // 2. Upload the new versions of the files
+        const storedLayoutName = await api.uploadFile(finalLayoutFile);
+        const storedGatesName = await api.uploadFile(finalGatesFile);
 
-      // 3. Save Metadata
-      await api.saveTrack({
-        name: trackName,
-        gates: storedGatesName,
-        coordinates: storedLayoutName 
-      });
+        if (selectedTrackId) {
+            console.log("Updating track with ID:", selectedTrackId); // Debugging line
+            
+            // Ensure selectedTrackId is a valid number/string before sending
+            await api.updateTrack(selectedTrackId, {
+                name: trackName,
+                gates: storedGatesName,
+                coordinates: storedLayoutName 
+            });
+            alert("✅ Track Configuration Updated!");
+        } else {
+            // --- MODE: CREATE NEW ---
+            await api.saveTrack({
+                name: trackName,
+                gates: storedGatesName,
+                coordinates: storedLayoutName 
+            });
+            alert("✅ New Track Saved Successfully!");
+        }
 
-      alert("✅ Track Saved Successfully!");
-      setTrackName("");
-      setLayoutFile(null);
-      setGatesFile(null);
-      setPreviewLayout(null);
-      setPreviewGates([]);
-      setGateStart(null);
+        // 3. Reset all states to clear the form
+        setTrackName("");
+        setLayoutFile(null);
+        setGatesFile(null);
+        setPreviewLayout(null);
+        setPreviewGates([]);
+        setSelectedTrackId(null); // Critical: Exit edit mode
+        setGateStart(null);
 
     } catch (error: any) {
-      console.error(error);
-      alert(`❌ Error: ${error.message}`);
+        console.error(error);
+        alert(`❌ Error: ${error.message}`);
     } finally {
-      setUploading(false);
+        setUploading(false);
     }
-  };
+};
 
   // ==========================
   // RENDER
@@ -372,6 +462,10 @@ export default function UploadPage() {
             </div>
           )}
 
+
+
+
+
           {/* --- TRACK FORM WITH PREVIEW --- */}
           {activeTab === 'track' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-full">
@@ -392,14 +486,46 @@ export default function UploadPage() {
                   </div>
 
                   <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
-                    <label className="block text-sm font-medium mb-2 text-gray-300">Track Layout (GeoJSON)</label>
-                    <input 
-                      type="file" 
-                      accept=".json,.geojson"
-                      onChange={handleLayoutFileChange}
-                      className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
-                    />
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-gray-300">Track Layout (GeoJSON)</label>
+                    <button 
+                      onClick={openTrackSelector}
+                      className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded transition-colors"
+                    >
+                      📂 Edit Existing
+                    </button>
                   </div>
+
+                  {/* Selection Menu (appears when Edit is clicked) */}
+                  {isEditMode && (
+                    <div className="mb-4 p-3 bg-gray-800 rounded border border-blue-500/50">
+                      <label className="block text-xs text-blue-400 mb-1">Select a Track to load:</label>
+                      <select 
+                        onChange={(e) => handleEditExistingTrack(Number(e.target.value))}
+                        defaultValue=""
+                        className="w-full bg-gray-900 text-sm p-2 rounded border border-gray-700 focus:outline-none"
+                      >
+                        <option value="" disabled>Choose track...</option>
+                        {existingTracks.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                      <button 
+                        onClick={() => setIsEditMode(false)}
+                        className="mt-2 text-xs text-gray-400 hover:text-white underline"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  <input 
+                    type="file" 
+                    accept=".json,.geojson"
+                    onChange={handleLayoutFileChange}
+                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                  />
+                </div>
 
                   <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
                     <label className="block text-sm font-medium mb-2 text-gray-300">Gates Data (JSON)</label>
@@ -433,14 +559,56 @@ export default function UploadPage() {
                       </div>
                       
                       {/* Manual Add Form */}
-                      <div className="grid grid-cols-2 gap-2 text-sm bg-gray-800 p-2 rounded border border-gray-600">
-                          <input placeholder="Name (e.g. S3)" value={newGate.name} onChange={e=>setNewGate({...newGate, name: e.target.value})} className="bg-gray-700 p-1 rounded col-span-2 text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
-                          <input placeholder="Lat 1" type="number" value={newGate.lat1} onChange={e=>setNewGate({...newGate, lat1: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
-                          <input placeholder="Lon 1" type="number" value={newGate.lon1} onChange={e=>setNewGate({...newGate, lon1: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
-                          <input placeholder="Lat 2" type="number" value={newGate.lat2} onChange={e=>setNewGate({...newGate, lat2: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
-                          <input placeholder="Lon 2" type="number" value={newGate.lon2} onChange={e=>setNewGate({...newGate, lon2: e.target.value})} className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" />
-                          <button onClick={handleAddGate} className="col-span-2 bg-green-600 hover:bg-green-500 py-1 rounded font-bold mt-1 text-white">Add Gate</button>
-                      </div>
+                     <div className="grid grid-cols-2 gap-2 text-sm bg-gray-800 p-2 rounded border border-gray-600">
+                      <input 
+                          placeholder="Name (e.g. S3)" 
+                          value={newGate.name} 
+                          onChange={e => setNewGate({...newGate, name: e.target.value})} 
+                          className="bg-gray-700 p-1 rounded col-span-2 text-white border border-gray-600 focus:border-blue-500 focus:outline-none" 
+                      />
+                      <input 
+                          placeholder="Lat 1" 
+                          type="number" 
+                          value={newGate.lat1} 
+                          onChange={e => setNewGate({...newGate, lat1: e.target.value})} 
+                          className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" 
+                      />
+                      <input 
+                          placeholder="Lon 1" 
+                          type="number" 
+                          value={newGate.lon1} 
+                          onChange={e => setNewGate({...newGate, lon1: e.target.value})} 
+                          className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" 
+                      />
+                      <input 
+                          placeholder="Lat 2" 
+                          type="number" 
+                          value={newGate.lat2} 
+                          onChange={e => setNewGate({...newGate, lat2: e.target.value})} 
+                          className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" 
+                      />
+                      <input 
+                          placeholder="Lon 2" 
+                          type="number" 
+                          value={newGate.lon2} 
+                          onChange={e => setNewGate({...newGate, lon2: e.target.value})} 
+                          className="bg-gray-700 p-1 rounded text-white border border-gray-600 focus:border-blue-500 focus:outline-none" 
+                      />
+                      
+                      {/* Action Buttons */}
+                      <button 
+                          onClick={handleClearForm} 
+                          className="bg-gray-600 hover:bg-gray-500 py-1 rounded font-bold mt-1 text-white transition-colors"
+                      >
+                          Clear
+                      </button>
+                      <button 
+                          onClick={handleAddGate} 
+                          className="bg-green-600 hover:bg-green-500 py-1 rounded font-bold mt-1 text-white transition-colors"
+                      >
+                          Add Gate
+                      </button>
+                  </div>
                   </div>
 
                   <div className="pt-2">
@@ -460,14 +628,13 @@ export default function UploadPage() {
                       Preview Mode
                   </div>
                   {previewLayout ? (
-                      <MapChart 
-                        geoData={previewLayout}
-                        data={[]} 
-                        gates={previewGates}
-                        width="100%"
-                        height="100%"
-                        rotation={-90}
-                      />
+                  <MapChartEditable 
+                  geoData={previewLayout}
+                  gates={[...previewGates, ...activeDrawingGate]} // Pass combined list
+                  rotation={-90}
+                  onMapClick={handleMapClick}
+                  onPointRightClick={handleGateDelete}
+                />
                   ) : (
                       <div className="flex h-full items-center justify-center text-gray-400 flex-col gap-2">
                           <span className="text-4xl">🗺️</span>
