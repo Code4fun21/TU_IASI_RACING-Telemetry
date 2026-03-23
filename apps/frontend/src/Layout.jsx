@@ -57,9 +57,10 @@ export default function Layout() {
                                 </div>
                             </TransitionChild>
                             <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-red-700 px-6 pb-2">
-                                <div className="flex h-16 shrink-0 items-center">
+                                
+                                <Link to="/" className="-m-1.5 p-1.5 opacity-100 hover:opacity-80 transition-opacity">
                                     <img alt="Your Company" src={logo} className="h-8 w-auto" />
-                                </div>
+                                </Link>
                                 <nav className="flex flex-1 flex-col">
                                     <ul role="list" className="flex flex-1 flex-col gap-y-7">
                                         <li>
@@ -100,9 +101,10 @@ export default function Layout() {
                 {/* --- 1. CHANGED: Desktop Sidebar Width (w-72 -> w-64) --- */}
                 <div className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-64 lg:flex-col">
                     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-red-700 px-6">
-                        <div className="flex h-16 shrink-0 items-center">
-                            <img alt="Your Company" src={logo} className="h-8 w-auto" />
-                        </div>
+
+                        <Link to="/" className="flex h-16 shrink-0 items-center">
+                                    <img alt="Your Company" src={logo} className="h-8 w-auto" />
+                                </Link>
                         <nav className="flex flex-1 flex-col">
                             <ul role="list" className="flex flex-1 flex-col gap-y-7">
                                 <li>
@@ -148,14 +150,14 @@ export default function Layout() {
                         <Bars3Icon aria-hidden="true" className="size-6" />
                     </button>
                     <div className="flex-1 text-sm/6 font-semibold text-white">Dashboard</div>
-                    <a href="#">
+                    {/* <a href="#">
                         <span className="sr-only">Your profile</span>
                         <img
                             alt=""
                             src="https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=facearea&facepad=2&w=256&h=256&q=80"
                             className="size-8 rounded-full bg-red-800"
                         />
-                    </a>
+                    </a> */}
                 </div>
 
                 {/* --- 2. CHANGED: Main Content Padding (pl-72 -> pl-64) --- */}

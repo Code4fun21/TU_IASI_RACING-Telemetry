@@ -97,66 +97,83 @@ const MapChartEditable = ({
   // --- FIX: Process & Rotate Gate Points (Matches Original Logic) ---
   // Inside MapChartEditable.jsx
 const gatePoints = useMemo(() => {
-  const raw = Array.isArray(gates) ? gates : [];
-  let pts = [];
+    const raw = Array.isArray(gates) ? gates : [];
+    let pts = [];
 
-  raw.forEach((gate, index) => {
-    const { lon1, lat1, lon2, lat2, name } = gate;
-    
-    // Only interpolate if the second point is different from the first
-    const isFinished = Number.isFinite(lon2) && 
-                       Number.isFinite(lat2) && 
-                       (lon1 !== lon2 || lat1 !== lat2);
-                       
-    const count = isFinished ? gatePointCount : 0;
-
-    for (let i = 0; i <= count; i++) {
-      const t = count === 0 ? 0 : i / count;
-      const lon = lon1 + (lon2 - lon1) * t;
-      const lat = lat1 + (lat2 - lat1) * t;
+    raw.forEach((gate, index) => {
+      const { lon1, lat1, lon2, lat2, name } = gate;
       
-      pts.push({
-        name: name || `Gate ${index}`,
-        gateIndex: index,
-        value: [lon, lat],
-      });
+      // Only interpolate if the second point is different from the first
+      const isFinished = Number.isFinite(lon2) && 
+                         Number.isFinite(lat2) && 
+                         (lon1 !== lon2 || lat1 !== lat2);
+                         
+      const count = isFinished ? gatePointCount : 0;
+      
+      // Find the middle index to attach the label to
+      const centerIndex = Math.floor(count / 2);
+
+      for (let i = 0; i <= count; i++) {
+        const t = count === 0 ? 0 : i / count;
+        const lon = lon1 + (lon2 - lon1) * t;
+        const lat = lat1 + (lat2 - lat1) * t;
+        
+        // Only true if this is the middle point of the interpolated line
+        const isCenterPoint = i === centerIndex; 
+        
+        pts.push({
+          name: name || `Gate ${index}`,
+          gateIndex: index,
+          value: [lon, lat],
+          label: {
+            show: isCenterPoint, // <-- CHANGED: Only show on the center point
+            formatter: '{b}',
+            position: 'top',
+            color: '#fff',
+            fontSize: 10,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            padding: [2, 4],
+            borderRadius: 3
+          },
+          itemStyle: { 
+            color: gate.color || "#ef4444" 
+          }
+        });
+      }
+    });
+
+    // Apply rotation to the points after interpolation
+    if (rotation !== 0 && mapCenter) {
+      pts = pts.map((pt) => ({
+        ...pt,
+        value: rotatePoint(pt.value, rotation, mapCenter),
+      }));
     }
-  });
 
-  // Apply rotation to the points after interpolation
-  if (rotation !== 0 && mapCenter) {
-    pts = pts.map((pt) => ({
-      ...pt,
-      value: rotatePoint(pt.value, rotation, mapCenter),
-    }));
-  }
-
-  return pts;
-}, [gates, gatePointCount, rotation, mapCenter]);
+    return pts;
+  }, [gates, gatePointCount, rotation, mapCenter]);
 
   useEffect(() => {
     if (!chartInstance.current || !processedGeoData) return;
 
-    chartInstance.current.setOption({
-      geo: {
-        map: mapName,
-        roam: true,
-        left: "center",
-        top: "middle",
-        itemStyle: { areaColor: "#eee", borderColor: "#000", borderWidth: 0.7 },
-      },
-      series: [
-        {
-          name: "Gates",
-          type: "scatter",
-          coordinateSystem: "geo",
-          symbolSize: 10,
-          itemStyle: { color: "#000" },
-          data: gatePoints,
-          zlevel: 2,
-        },
-      ],
-    }, { notMerge: true });
+chartInstance.current.setOption({
+  geo: {
+    map: mapName,
+    roam: true,
+    itemStyle: { areaColor: "#eee", borderColor: "#000", borderWidth: 0.7 },
+  },
+series: [
+  {
+    name: "Gates",
+    type: "scatter",
+    coordinateSystem: "geo",
+    symbolSize: 8,
+    // ECharts uses itemStyle and label from individual data points above
+    data: gatePoints, 
+    zlevel: 2,
+  },
+],
+}, { notMerge: true });
   }, [gatePoints, processedGeoData, mapName]);
 
   return (

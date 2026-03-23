@@ -1,11 +1,12 @@
-import React, { useState,useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { api } from '../services/api'; 
 import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
 import MapChartEditable from '../components/MapChartEditable';
-
-// --- Types & Interfaces ---
+import * as turf from '@turf/turf';
+import { TbArrowsRightLeft } from "react-icons/tb";
+import { processTrackGeometry } from '../services/gateIdentifier';
 
 interface Gate {
   name: string;
@@ -14,6 +15,7 @@ interface Gate {
   lat2: number;
   lon2: number;
   isPreview?: boolean; 
+  color?: string;
 }
 
 interface NewGateForm {
@@ -44,42 +46,378 @@ interface SessionMeta {
   monopostId: number;
 }
 
+interface ApexPoint {
+  index: number;
+  coordinate: number[];
+  totalCornerAngle: number;
+  isRich: boolean; // True if it was a group of points, False if it was a single sharp point
+}
+
 export default function UploadPage() {
   const navigate = useNavigate();
   
-  // --- TABS STATE ---
   const [activeTab, setActiveTab] = useState<'session' | 'track'>('session');
   const [uploading, setUploading] = useState<boolean>(false);
-
-  // --- SESSION STATE ---
   const [sessionFile, setSessionFile] = useState<File | null>(null);
   const [plotData, setPlotData] = useState<any[]>([]);
   const [trackId, setTrackId] = useState<string>("1"); 
-
-  // --- TRACK STATE ---
   const [trackName, setTrackName] = useState<string>("");
   const [layoutFile, setLayoutFile] = useState<File | null>(null);
   const [gatesFile, setGatesFile] = useState<File | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [existingTracks, setExistingTracks] = useState<any[]>([]); // To hold list of tracks
-
-  // --- PREVIEW & EDIT STATE ---
+  const [existingTracks, setExistingTracks] = useState<any[]>([]); 
   const [previewLayout, setPreviewLayout] = useState<any>(null);
   const [previewGates, setPreviewGates] = useState<Gate[]>([]);
   const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
-  
-  // Form state for manual entry
-  const [newGate, setNewGate] = useState<NewGateForm>({ 
-    name: "", lat1: "", lon1: "", lat2: "", lon2: "" 
-  });
+  const [newGate, setNewGate] = useState<NewGateForm>({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
 
-  // --- RUBBER BAND GATE DRAWING STATE ---
+  const [wizardActive, setWizardActive] = useState(false);
+  const [detectedTurns, setDetectedTurns] = useState<any[]>([]);
+  const [currentTurnIdx, setCurrentTurnIdx] = useState(0);
+  const [isClockwise, setIsClockwise] = useState(true);
+  const [currentTurnName, setCurrentTurnName] = useState<string>("");
   const [gateStart, setGateStart] = useState<Coordinate | null>(null);
 
-  // ==========================
-  // 1. SESSION LOGIC
-  // ==========================
+  const createPerpendicularGate = (coord: any[], nextCoord:any[], name: string): Gate => {
+    // Turf strictly expects [longitude, latitude]
+    const bearing = turf.bearing(coord, nextCoord);
+    
+    // We calculate perpendicular angles
+    const perpBearing = bearing + 90;
+    
+    // CHANGED: 0.006 km = 6 meters from the center line (12 meters total gate width)
+    // This perfectly matches the coordinate spread in your screenshot!
+    const distance = 0.006; 
+    
+    const point1 = turf.destination(coord, distance, perpBearing, {units: 'kilometers'});
+    const point2 = turf.destination(coord, distance, perpBearing + 180, {units: 'kilometers'});
+
+    return {
+      name,
+      lat1: point1.geometry.coordinates[1], // Latitude is index 1
+      lon1: point1.geometry.coordinates[0], // Longitude is index 0
+      lat2: point2.geometry.coordinates[1],
+      lon2: point2.geometry.coordinates[0],
+      isPreview: false,
+      color: '#6b7280'
+    };
+  };
+
+
+// const generateFSKinematicGates = () => {
+//   console.log("--- FS Scale Kinematic Chaining & Classification ---");
+//   if (!previewLayout || !previewLayout.features || previewLayout.features.length < 2) return;
+
+//   setPreviewGates([]);
+
+//   let leftRaw: number[][] = previewLayout.features[0].geometry.coordinates;
+//   if (previewLayout.features[0].geometry.type === "Polygon") leftRaw = (leftRaw as any)[0];
+//   const isClosed = leftRaw[0][0] === leftRaw[leftRaw.length - 1][0] && leftRaw[0][1] === leftRaw[leftRaw.length - 1][1];
+//   const leftCoords = isClosed ? leftRaw.slice(0, -1) : leftRaw;
+//   const N = leftCoords.length;
+
+//   const WINDOW_METERS = 20;
+//   const ENERGY_THRESHOLD = 15;
+//   const FS_CHAIN_GAP_METERS = 6; // FS Rule: Slalom cones are 7-12m apart
+
+//   // ==========================================
+//   // STAGE 1 & 2: Kinematic Energy Baseline
+//   // ==========================================
+//   const headings = leftCoords.map((p, i) => {
+//     const pNext = leftCoords[(i + 1) % N];
+//     const x1 = p[0] * (Math.PI / 180) * 6378137;
+//     const y1 = Math.log(Math.tan((90 + p[1]) * Math.PI / 360)) * 6378137;
+//     const x2 = pNext[0] * (Math.PI / 180) * 6378137;
+//     const y2 = Math.log(Math.tan((90 + pNext[1]) * Math.PI / 360)) * 6378137;
+//     return Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
+//   });
+
+//   const deltaThetas: number[] = [];
+//   const segLens: number[] = [];
+
+//   for (let i = 0; i < N; i++) {
+//     const thetaCurr = headings[i];
+//     const thetaPrev = headings[(i - 1 + N) % N];
+//     let delta = ((thetaCurr - thetaPrev + 180) % 360);
+//     if (delta < 0) delta += 360; 
+//     delta -= 180;
+    
+//     deltaThetas.push(delta);
+//     segLens.push(turf.distance(turf.point(leftCoords[i]), turf.point(leftCoords[(i + 1) % N]), { units: 'meters' }));
+//   }
+
+//   const accumulatedYaws = leftCoords.map((_, i) => {
+//     let sumYaw = 0;
+//     let distAcc = 0;
+//     let k = i;
+//     while (distAcc < WINDOW_METERS) {
+//       sumYaw += deltaThetas[k];
+//       distAcc += segLens[k];
+//       k = (k + 1) % N;
+//       if (k === i) break;
+//     }
+//     return sumYaw;
+//   });
+
+//   // ==========================================
+//   // STAGE 3: Action Zones (Base Events)
+//   // ==========================================
+//   const isActiveZone = accumulatedYaws.map(yaw => Math.abs(yaw) > ENERGY_THRESHOLD);
+//   const startScanIdx = isActiveZone.indexOf(false);
+//   if (startScanIdx === -1) return console.warn("Track energy too high.");
+
+//   const rawEvents: any[] = [];
+//   let currentZone: number[] = [];
+//   let inZone = false;
+
+//   for (let i = 0; i < N; i++) {
+//     let idx = (startScanIdx + i) % N;
+//     if (isActiveZone[idx]) {
+//       if (!inZone) inZone = true;
+//       currentZone.push(idx);
+//     } else {
+//       if (inZone) {
+//         // Calculate the core properties of this single event
+//         const netAngle = Math.abs(currentZone.reduce((sum, idx) => sum + deltaThetas[idx], 0));
+//         const yawSum = currentZone.reduce((sum, idx) => sum + accumulatedYaws[idx], 0);
+        
+//         rawEvents.push({
+//           entryIdx: currentZone[0],
+//           exitIdx: currentZone[currentZone.length - 1],
+//           netAngle,
+//           sign: Math.sign(yawSum)
+//         });
+        
+//         currentZone = [];
+//         inZone = false;
+//       }
+//     }
+//   }
+//   if (inZone && currentZone.length > 0) {
+//     rawEvents.push({
+//       entryIdx: currentZone[0],
+//       exitIdx: currentZone[currentZone.length - 1],
+//       netAngle: Math.abs(currentZone.reduce((sum, idx) => sum + deltaThetas[idx], 0)),
+//       sign: Math.sign(currentZone.reduce((sum, idx) => sum + accumulatedYaws[idx], 0))
+//     });
+//   }
+
+//   // ==========================================
+//   // FS STEP 1: The Proximity Chain (6m Rule)
+//   // ==========================================
+//   if (rawEvents.length === 0) return;
+//   const chains: typeof rawEvents[] = [];
+//   let currentChain = [rawEvents[0]];
+
+//   for (let i = 1; i < rawEvents.length; i++) {
+//     const prevEvent = currentChain[currentChain.length - 1];
+//     const currEvent = rawEvents[i];
+
+//     // Measure path gap from OUT of previous to IN of current
+//     let gapDist = 0;
+//     let walkIdx = prevEvent.exitIdx;
+//     while (walkIdx !== currEvent.entryIdx && gapDist <= FS_CHAIN_GAP_METERS) {
+//       gapDist += segLens[walkIdx];
+//       walkIdx = (walkIdx + 1) % N;
+//     }
+
+//     if (gapDist <= FS_CHAIN_GAP_METERS) {
+//       currentChain.push(currEvent); // Chain them!
+//     } else {
+//       chains.push(currentChain);    // Break the chain
+//       currentChain = [currEvent];
+//     }
+//   }
+//   chains.push(currentChain);
+
+//   // ==========================================
+//   // FS STEPS 2, 3 & 4: Filter, Name, and Extract
+//   // ==========================================
+//   const finalGates: Gate[] = [];
+//   let maneuverCount = 1;
+
+//   chains.forEach((chain) => {
+//     // FS STEP 4: The Slalom Filter (Garbage Collection)
+//     // If it's isolated (not a slalom/chicane) and the net steering angle is weak, destroy it.
+//     if (chain.length === 1 && chain[0].netAngle < 15) return;
+
+//     // FS STEP 2: The FS Dictionary
+//     let typeName = "Turn";
+    
+//     if (chain.length > 1) {
+//       let signChanges = 0;
+//       let currentSign = chain[0].sign;
+      
+//       for (let i = 1; i < chain.length; i++) {
+//         if (chain[i].sign !== currentSign && chain[i].sign !== 0) {
+//           signChanges++;
+//           currentSign = chain[i].sign;
+//         }
+//       }
+
+//       if (signChanges === 0) typeName = "Double Apex";
+//       else if (signChanges === 1) typeName = "Chicane";
+//       else typeName = "Slalom";
+//     }
+
+//     const maneuverName = `${typeName} ${maneuverCount++}`;
+
+//     // FS STEP 3: Final Extraction
+//     // Use the IN gate of the very first event, and the OUT gate of the very last.
+//     const masterEntryIdx = chain[0].entryIdx;
+//     const masterExitIdx = chain[chain.length - 1].exitIdx;
+
+//     const gIn = createPerpendicularGate(leftCoords[masterEntryIdx], leftCoords[(masterEntryIdx + 1) % N], `${maneuverName} IN`);
+//     const gOut = createPerpendicularGate(leftCoords[masterExitIdx], leftCoords[(masterExitIdx + 1) % N], `${maneuverName} OUT`);
+    
+//     finalGates.push(gIn, gOut);
+//   });
+
+//   setPreviewGates(finalGates);
+//   console.log(`FS Chain logic successfully grouped ${finalGates.length / 2} classified track sectors.`);
+// };
+//   --- EXACT APEX GATE PLACEMENT ---
   
+  const confirmTurn = () => {
+    if (detectedTurns.length === 0) return;
+    const turn = detectedTurns[currentTurnIdx];
+    
+    let leftRaw: any[] = previewLayout.features[0].geometry.coordinates;
+    if (previewLayout.features[0].geometry.type === "Polygon") leftRaw = leftRaw[0];
+    const isClosed = leftRaw[0][0] === leftRaw[leftRaw.length - 1][0] && 
+                     leftRaw[0][1] === leftRaw[leftRaw.length - 1][1];
+    const leftCoords = isClosed ? leftRaw.slice(0, -1) : leftRaw;
+
+    let rightRaw: any[] = previewLayout.features[1].geometry.coordinates;
+    if (previewLayout.features[1].geometry.type === "Polygon") rightRaw = rightRaw[0];
+    const rightLine = turf.lineString(rightRaw);
+
+    const createGateAtApex = (idx: number, nameSuffix: string): Gate | null => {
+        const ptLeft = leftCoords[idx];
+        if (!ptLeft) return null;
+
+        // Draw a perfectly straight line to the right wall
+        const rightSnap = turf.nearestPointOnLine(rightLine, turf.point(ptLeft));
+
+        return {
+            name: `${currentTurnName} ${nameSuffix}`,
+            lat1: ptLeft[1],
+            lon1: ptLeft[0],
+            lat2: rightSnap.geometry.coordinates[1],
+            lon2: rightSnap.geometry.coordinates[0],
+            isPreview: false,
+            color: '#6b7280'
+        };
+    };
+
+    // Both IN and OUT gates are placed EXACTLY on the same apex index
+    const g1 = createGateAtApex(turn.apexIdx, "In");
+    const g2 = createGateAtApex(turn.apexIdx, "Out");
+
+    const newGates: Gate[] = [];
+    if (g1) newGates.push(g1);
+    if (g2) newGates.push(g2);
+
+    setPreviewGates(prev => [...prev, ...newGates]);
+    
+    if (currentTurnIdx < detectedTurns.length - 1) {
+        const nextIdx = currentTurnIdx + 1;
+        setCurrentTurnIdx(nextIdx);
+        setCurrentTurnName(`Turn ${nextIdx + 1}`);
+    } else {
+        alert("Wizard complete!");
+        setWizardActive(false);
+    }
+  };
+
+const generateFSKinematicGates = () => {
+  if (!previewLayout || !previewLayout.features || previewLayout.features.length < 1) return;
+
+  let leftRaw: number[][] = previewLayout.features[0].geometry.coordinates;
+  if (previewLayout.features[0].geometry.type === "Polygon") leftRaw = (leftRaw as any)[0];
+  const isClosed = leftRaw[0][0] === leftRaw[leftRaw.length - 1][0] && leftRaw[0][1] === leftRaw[leftRaw.length - 1][1];
+  const leftCoords = isClosed ? leftRaw.slice(0, -1) : leftRaw;
+  const N = leftCoords.length;
+
+  const zones = processTrackGeometry(previewLayout);
+  console.log(zones)
+  if (!zones || zones.length === 0) return;
+
+  const finalGates: Gate[] = [];
+
+  zones.forEach((zone: any, index: number) => {
+    const maneuverName = `T${index + 1}`;
+
+    const startIdx = zone.startIndex % N;
+    const endIdx = zone.endIndex % N;
+
+    const gIn = createPerpendicularGate(leftCoords[startIdx], leftCoords[(startIdx + 1) % N], `${maneuverName} IN`);
+    const gOut = createPerpendicularGate(leftCoords[endIdx], leftCoords[(endIdx + 1) % N], `${maneuverName} OUT`);
+    
+    finalGates.push(gIn, gOut);
+  });
+
+  setPreviewGates(finalGates);
+};
+
+
+
+  const wizardPreviewGates = useMemo(() => {
+    if (!wizardActive || detectedTurns.length === 0) return [];
+    const turn = detectedTurns[currentTurnIdx];
+    if (!turn || !previewLayout?.features || previewLayout.features.length < 2) return [];
+
+    let leftRaw: any[] = previewLayout.features[0].geometry.coordinates;
+    if (previewLayout.features[0].geometry.type === "Polygon") leftRaw = leftRaw[0];
+    const isClosed = leftRaw[0][0] === leftRaw[leftRaw.length - 1][0] && 
+                     leftRaw[0][1] === leftRaw[leftRaw.length - 1][1];
+    const leftCoords = isClosed ? leftRaw.slice(0, -1) : leftRaw;
+
+    let rightRaw: any[] = previewLayout.features[1].geometry.coordinates;
+    if (previewLayout.features[1].geometry.type === "Polygon") rightRaw = rightRaw[0];
+    const rightLine = turf.lineString(rightRaw);
+
+    const createGateAtApex = (idx: number, nameSuffix: string): Gate | null => {
+        const ptLeft = leftCoords[idx];
+        if (!ptLeft) return null;
+
+        const rightSnap = turf.nearestPointOnLine(rightLine, turf.point(ptLeft));
+
+        return {
+            name: `${currentTurnName || `Turn ${currentTurnIdx + 1}`} ${nameSuffix}`,
+            lat1: ptLeft[1],
+            lon1: ptLeft[0],
+            lat2: rightSnap.geometry.coordinates[1],
+            lon2: rightSnap.geometry.coordinates[0],
+            isPreview: true,
+            color: '#3b82f6'
+        };
+    };
+
+    // Both IN and OUT preview gates are placed EXACTLY on the same apex index
+    const g1 = createGateAtApex(turn.apexIdx, "In (Preview)");
+    const g2 = createGateAtApex(turn.apexIdx, "Out (Preview)");
+
+    const previewArray: Gate[] = [];
+    if (g1) previewArray.push(g1);
+    if (g2) previewArray.push(g2);
+    
+    return previewArray;
+  }, [wizardActive, detectedTurns, currentTurnIdx, isClockwise, currentTurnName, previewLayout]);
+
+  const skipTurn = () => {
+    moveToNext();
+  };
+
+  const moveToNext = () => {
+    if (currentTurnIdx < detectedTurns.length - 1) {
+      setCurrentTurnIdx(prev => prev + 1);
+    } else {
+      alert("Wizard complete!");
+      setWizardActive(false);
+    }
+  };
+
   const onRaceTrackChange = (track: TrackData) => {
     if (track && track.id) {
         setTrackId(String(track.id));
@@ -89,32 +427,19 @@ export default function UploadPage() {
   const handleSessionFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
-
-    // 1. Validation: Allow CSV or TXT
     const validExtensions = ['.csv', '.txt'];
     const fileExtension = selectedFile.name.slice(selectedFile.name.lastIndexOf('.')).toLowerCase();
-
-    // Check MIME type OR extension (MIME types can be unreliable for .txt/csv across OSs)
-    const isValidType = 
-        selectedFile.type === 'text/csv' || 
-        selectedFile.type === 'text/plain' || 
-        selectedFile.type === 'application/vnd.ms-excel' ||
-        validExtensions.includes(fileExtension);
+    const isValidType = selectedFile.type === 'text/csv' || selectedFile.type === 'text/plain' || selectedFile.type === 'application/vnd.ms-excel' || validExtensions.includes(fileExtension);
 
     if (!isValidType) {
         alert("Please upload a valid .csv or .txt file.");
         return;
     }
-
     setSessionFile(selectedFile);
-
-    // Papa Parse handles delimiters automatically for both .csv and .txt
     Papa.parse(selectedFile, {
       header: true,
       dynamicTyping: true,
-      complete: (results) => {
-        setPlotData(results.data); 
-      },
+      complete: (results) => { setPlotData(results.data); },
       error: (err: Error) => alert("Error parsing file: " + err.message)
     });
   };
@@ -131,25 +456,11 @@ export default function UploadPage() {
   const handleSaveSession = async () => {
     if (!sessionFile) return;
     setUploading(true);
-
     try {
       const storedFileName = await api.uploadFile(sessionFile);
       const dateTime = convertUnixToDate(sessionFile.lastModified);
-
-      // 2. Dynamic Renaming: Replace extension with _decoded.json
-      // This regex replaces .csv OR .txt (case insensitive) at the end of the string
       const decodedName = storedFileName.replace(/\.(csv|txt)$/i, '') + '_decoded.json';
-
-      const sessionMeta: SessionMeta = {
-        csvFileName: storedFileName,
-        decodedFileName: decodedName,
-        trackId: Number(trackId),
-        date: dateTime.date,
-        time: dateTime.time,
-        driverId: 1,
-        monopostId: 1
-      };
-
+      const sessionMeta: SessionMeta = { csvFileName: storedFileName, decodedFileName: decodedName, trackId: Number(trackId), date: dateTime.date, time: dateTime.time, driverId: 1, monopostId: 1 };
       await api.saveSession(sessionMeta);
       alert("✅ Session Saved Successfully!");
       navigate('/'); 
@@ -161,10 +472,6 @@ export default function UploadPage() {
     }
   };
 
-  // ==========================
-  // 2. TRACK LOGIC & PREVIEW
-  // ==========================
-  
   const readJsonFile = (file: File): Promise<any> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -172,9 +479,7 @@ export default function UploadPage() {
         try {
           const json = JSON.parse(e.target?.result as string);
           resolve(json);
-        } catch (err) {
-          reject(new Error("File is not valid JSON"));
-        }
+        } catch (err) { reject(new Error("File is not valid JSON")); }
       };
       reader.onerror = (e) => reject(e);
       reader.readAsText(file);
@@ -213,68 +518,47 @@ export default function UploadPage() {
     try {
         setUploading(true);
         const track = await api.getTrackById(selectedTrackId); 
-
         if (!track || !track.coordinates || !track.gates) {
             alert("This track configuration is missing required layout or gates files.");
             return;
         }
-
-        // --- NEW: Set ID and Enter Edit Mode ---
         setSelectedTrackId(selectedTrackId);
         setTrackName(track.name || "");
-        
         const layoutBlob = await api.downloadFile(track.coordinates);
         const gatesBlob = await api.downloadFile(track.gates);
-
         setPreviewLayout(JSON.parse(await layoutBlob.text()));
         setPreviewGates(JSON.parse(await gatesBlob.text()));
-        
         setIsEditMode(false); 
-    } catch (err: any) {
-        alert("Error loading existing track: " + err.message);
-    } finally {
-        setUploading(false);
-    }
-};
+    } catch (err: any) { alert("Error loading existing track: " + err.message); } finally { setUploading(false); }
+  };
 
-// Function to open the selection menu and fetch track list
-const openTrackSelector = async () => {
-    // REPLACE THIS: Line to get all tracks for the dropdown
+  const openTrackSelector = async () => {
     const tracks = await api.getTracks(); 
     setExistingTracks(tracks);
     setIsEditMode(true);
-};
-
-  // Gate Editing (Manual Form)
-  const handleAddGate = (e: React.MouseEvent<HTMLButtonElement>) => {
-  e.preventDefault();
-
-  const gate: Gate = {
-    name: newGate.name || `G${previewGates.length + 1}`,
-    lat1: Number(newGate.lat1),
-    lon1: Number(newGate.lon1),
-    lat2: Number(newGate.lat2),
-    lon2: Number(newGate.lon2),
   };
 
-  // Validation: Ensure all 4 coordinates are valid numbers
-  if ([gate.lat1, gate.lon1, gate.lat2, gate.lon2].some(n => isNaN(n))) {
-    alert("Please provide both points by clicking the map or entering manually.");
-    return;
-  }
-
-
-  setPreviewGates([...previewGates, gate]);
-
-  // Reset the form for the next gate
-  setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
-};
-
+  const handleAddGate = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    const gate: Gate = {
+      name: newGate.name || `G${previewGates.length + 1}`,
+      lat1: Number(newGate.lat1),
+      lon1: Number(newGate.lon1),
+      lat2: Number(newGate.lat2),
+      lon2: Number(newGate.lon2),
+    };
+    if ([gate.lat1, gate.lon1, gate.lat2, gate.lon2].some(n => isNaN(n))) {
+      alert("Please provide both points by clicking the map or entering manually.");
+      return;
+    }
+    setPreviewGates([...previewGates, gate]);
+    setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
+  };
 
   const handleClearForm = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
     setNewGate({ name: "", lat1: "", lon1: "", lat2: "", lon2: "" });
-    setGateStart(null); // Resets the map click sequence
+    setGateStart(null); 
   };
 
   const handleDeleteGate = (index: number) => {
@@ -282,58 +566,34 @@ const openTrackSelector = async () => {
       setPreviewGates(updated);
   };
 
-  // ==========================
-  // 3. MAP INTERACTION (Visual Gate Creator)
-  // ==========================
+  const activeDrawingGate = useMemo(() => {
+    if (!newGate.lat1 || !newGate.lon1) return [];
+    return [{
+      name: "New Point",
+      lat1: Number(newGate.lat1),
+      lon1: Number(newGate.lon1),
+      lat2: newGate.lat2 ? Number(newGate.lat2) : Number(newGate.lat1),
+      lon2: newGate.lon2 ? Number(newGate.lon2) : Number(newGate.lon1),
+      isPreview: true
+    }];
+  }, [newGate]);
 
+  const handleMapClick = (coords: Coordinate) => {
+    setNewGate((prev) => {
+      if (!prev.lat1) {
+        return { ...prev, lat1: coords.lat.toString(), lon1: coords.lon.toString() };
+      } 
+      if (!prev.lat2) {
+        return { ...prev, lat2: coords.lat.toString(), lon2: coords.lon.toString() };
+      }
+      return { ...prev, lat2: coords.lat.toString(), lon2: coords.lon.toString() };
+    });
+  };
 
-const activeDrawingGate = useMemo(() => {
-  if (!newGate.lat1 || !newGate.lon1) return [];
-  
-  return [{
-    name: "New Point",
-    lat1: Number(newGate.lat1),
-    lon1: Number(newGate.lon1),
-    // Use Lat1 as Lat2 if the second point isn't clicked yet so it shows as a dot
-    lat2: newGate.lat2 ? Number(newGate.lat2) : Number(newGate.lat1),
-    lon2: newGate.lon2 ? Number(newGate.lon2) : Number(newGate.lon1),
-    isPreview: true
-  }];
-}, [newGate]);
-
-const handleMapClick = (coords: Coordinate) => {
-  // We use a functional update to ensure we have the latest 'newGate' state
-  setNewGate((prev) => {
-    // If Lat 1 is empty, fill point 1
-    if (!prev.lat1) {
-      return {
-        ...prev,
-        lat1: coords.lat.toString(),
-        lon1: coords.lon.toString(),
-      };
-    } 
-    // If Lat 1 is full but Lat 2 is empty, fill point 2
-    if (!prev.lat2) {
-      return {
-        ...prev,
-        lat2: coords.lat.toString(),
-        lon2: coords.lon.toString(),
-      };
-    }
-    // If both are full, overwrite point 2 (or you could reset and start over)
-    return {
-      ...prev,
-      lat2: coords.lat.toString(),
-      lon2: coords.lon.toString(),
-    };
-  });
-};
-
-// --- Add logic for Right-Click Delete ---
-const handleGateDelete = (index: number) => {
-  const updated = previewGates.filter((_, i) => i !== index);
-  setPreviewGates(updated);
-};
+  const handleGateDelete = (index: number) => {
+    const updated = previewGates.filter((_, i) => i !== index);
+    setPreviewGates(updated);
+  };
 
   const handleSaveTrack = async () => {
     if (!trackName || !previewLayout) {
@@ -341,23 +601,15 @@ const handleGateDelete = (index: number) => {
         return;
     }
     setUploading(true);
-
     try {
-        // 1. Convert current UI state (Map + Gates) into JSON Files
         const layoutBlob = new Blob([JSON.stringify(previewLayout)], { type: "application/json" });
         const gatesBlob = new Blob([JSON.stringify(previewGates)], { type: "application/json" });
-        
         const finalLayoutFile = new File([layoutBlob], `${trackName}_layout.json`);
         const finalGatesFile = new File([gatesBlob], `${trackName}_gates.json`);
-
-        // 2. Upload the new versions of the files
         const storedLayoutName = await api.uploadFile(finalLayoutFile);
         const storedGatesName = await api.uploadFile(finalGatesFile);
 
         if (selectedTrackId) {
-            console.log("Updating track with ID:", selectedTrackId); // Debugging line
-            
-            // Ensure selectedTrackId is a valid number/string before sending
             await api.updateTrack(selectedTrackId, {
                 name: trackName,
                 gates: storedGatesName,
@@ -365,7 +617,6 @@ const handleGateDelete = (index: number) => {
             });
             alert("✅ Track Configuration Updated!");
         } else {
-            // --- MODE: CREATE NEW ---
             await api.saveTrack({
                 name: trackName,
                 gates: storedGatesName,
@@ -374,26 +625,19 @@ const handleGateDelete = (index: number) => {
             alert("✅ New Track Saved Successfully!");
         }
 
-        // 3. Reset all states to clear the form
         setTrackName("");
         setLayoutFile(null);
         setGatesFile(null);
         setPreviewLayout(null);
         setPreviewGates([]);
-        setSelectedTrackId(null); // Critical: Exit edit mode
+        setSelectedTrackId(null); 
         setGateStart(null);
-
     } catch (error: any) {
         console.error(error);
         alert(`❌ Error: ${error.message}`);
-    } finally {
-        setUploading(false);
-    }
-};
+    } finally { setUploading(false); }
+  };
 
-  // ==========================
-  // RENDER
-  // ==========================
   return (
     <div className="flex min-h-screen justify-center bg-gray-900 text-white p-6">
       <div className="max-w-6xl w-full bg-gray-800 rounded-lg shadow-2xl overflow-hidden border border-gray-700 flex flex-col">
@@ -461,10 +705,6 @@ const handleGateDelete = (index: number) => {
               </div>
             </div>
           )}
-
-
-
-
 
           {/* --- TRACK FORM WITH PREVIEW --- */}
           {activeTab === 'track' && (
@@ -610,7 +850,49 @@ const handleGateDelete = (index: number) => {
                       </button>
                   </div>
                   </div>
+                  <div className="pt-2 border-t border-gray-700 mt-4">
+                    {!wizardActive ? (
+                      <button 
+                        onClick={generateFSKinematicGates}
+                        disabled={!previewLayout || uploading}
+                        className="w-full py-2 px-4 mb-2 bg-blue-600 hover:bg-blue-500 rounded font-bold transition-colors flex items-center justify-center gap-2"
+                      >
+                        ✨ Start Auto-Gate Wizard
+                      </button>
+                    ) : (
+                      <div className="bg-gray-700 p-3 rounded-lg border border-blue-500 space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-blue-400 font-bold text-xs uppercase">
+                            Wizard: {currentTurnIdx + 1} / {detectedTurns.length}
+                          </span>
+                          <button onClick={() => setIsClockwise(!isClockwise)} className="p-1 hover:bg-gray-600 rounded">
+                             <TbArrowsRightLeft className={`size-5 ${isClockwise ? 'text-green-400' : 'text-orange-400'}`} />
+                          </button>
+                        </div>
 
+                        {/* NEW: Turn Name Input */}
+                        <div>
+                          <label className="text-[10px] text-gray-400 block mb-1">Turn Name:</label>
+                          <input 
+                            type="text"
+                            value={currentTurnName}
+                            onChange={(e) => setCurrentTurnName(e.target.value)}
+                            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm focus:border-blue-500 focus:outline-none"
+                            placeholder="e.g. Tarzan, Bus Stop..."
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={skipTurn} className="py-1 bg-gray-600 hover:bg-gray-500 rounded text-xs">Skip</button>
+                          <button onClick={confirmTurn} className="py-1 bg-green-600 hover:bg-green-500 rounded text-xs font-bold">Confirm Turn</button>
+                        </div>
+                        
+                        <button onClick={() => setWizardActive(false)} className="w-full py-1 text-gray-400 hover:text-white text-[10px] underline">
+                          Cancel Wizard
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <div className="pt-2">
                       <button 
                         onClick={handleSaveTrack}
@@ -620,6 +902,7 @@ const handleGateDelete = (index: number) => {
                         {uploading ? 'Saving...' : 'Save Track Configuration'}
                       </button>
                   </div>
+
                </div>
 
                {/* Right Column: Map Preview */}
@@ -629,12 +912,13 @@ const handleGateDelete = (index: number) => {
                   </div>
                   {previewLayout ? (
                   <MapChartEditable 
-                  geoData={previewLayout}
-                  gates={[...previewGates, ...activeDrawingGate]} // Pass combined list
-                  rotation={-90}
-                  onMapClick={handleMapClick}
-                  onPointRightClick={handleGateDelete}
-                />
+  geoData={previewLayout}
+  // YOU MUST ADD wizardPreviewGates HERE:
+  gates={[...previewGates, ...activeDrawingGate, ...wizardPreviewGates]} 
+  rotation={-90}
+  onMapClick={handleMapClick}
+  onPointRightClick={handleGateDelete}
+/>
                   ) : (
                       <div className="flex h-full items-center justify-center text-gray-400 flex-col gap-2">
                           <span className="text-4xl">🗺️</span>
@@ -642,7 +926,6 @@ const handleGateDelete = (index: number) => {
                       </div>
                   )}
                </div>
-
 
             </div>
           )}
