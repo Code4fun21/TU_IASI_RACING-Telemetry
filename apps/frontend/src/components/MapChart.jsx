@@ -133,7 +133,7 @@ const MapChart = ({
   }, [data, rotation, mapCenter]);
 
 
-  // --- 3. Process & Rotate Gate Points ---
+// --- 3. Process & Rotate Gate Points ---
   const gatePoints = useMemo(() => {
     const raw = Array.isArray(gates) ? gates : gates?.gates || [];
     let pts = [];
@@ -142,11 +142,29 @@ const MapChart = ({
       // Ensure all coordinates exist and are numbers
       const { lon1, lat1, lon2, lat2, name } = gate;
       
-      if (
-        [lon1, lat1, lon2, lat2].some(v => !Number.isFinite(v))
-      ) {
+      if ([lon1, lat1, lon2, lat2].some(v => !Number.isFinite(v))) {
         return; // Skip invalid gates
       }
+
+      // --- COLOR & LABEL FORMATTING LOGIC ---
+      let pointColor = gate.color || "#9ca3af"; // Default to gray
+      let labelText = name ?? "";
+      
+      if (!gate.color && name) {
+          const firstChar = name.trim().charAt(0).toUpperCase();
+          if (firstChar === 'T') {
+              pointColor = "#000000"; // Black for Turns
+              // Split at '-' and take the first part (e.g., "T1-Left" -> "T1")
+              labelText = name.split('-')[0].trim(); 
+          } else if (firstChar === 'S') {
+              pointColor = "#f63b3b"; // Red for Sectors
+              // Keep entire name
+              labelText = name.trim(); 
+          }
+      }
+
+      // Find the center index for placing the label
+      const centerIndex = Math.floor(gatePointCount / 2);
 
       for (let i = 0; i <= gatePointCount; i++) {
         const t = i / gatePointCount;
@@ -154,23 +172,31 @@ const MapChart = ({
         const lon = lon1 + (lon2 - lon1) * t;
         const lat = lat1 + (lat2 - lat1) * t;
         
+        const isCenterPoint = i === centerIndex;
+
         pts.push({
           name: name ?? "",
           value: [lon, lat],
+          itemStyle: { 
+            color: pointColor 
+          },
+          // --- NEW: Persistent Label on Center Point ---
+          label: {
+            show: isCenterPoint,
+            formatter: labelText,
+            position: 'top',
+            color: '#fff',
+            fontSize: 10,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            padding: [2, 4],
+            borderRadius: 3
+          }
         });
       }
     });
-
-    // Rotate
-    if (rotation !== 0 && mapCenter) {
-      pts = pts.map((pt) => ({
-        ...pt,
-        value: rotatePoint(pt.value, rotation, mapCenter),
-      }));
-    }
-
+    
     return pts;
-  }, [gates, gatePointCount, rotation, mapCenter]);
+  }, [gates, gatePointCount]);
 
 
   // --- 4. Render Chart ---
@@ -182,11 +208,16 @@ const MapChart = ({
         geo: {
           map: mapName,
           roam: true,
+          silent: true,
           left: "center",
           top: "middle",
           label: { show: false },
           itemStyle: { areaColor: "#eee", borderColor: "#000", borderWidth: 0.7 },
-          emphasis: { itemStyle: { areaColor: "#ccc" } },
+          tooltip: { show: false },
+          emphasis: { 
+            label: { show: false },
+            itemStyle: { areaColor: "#ccc" } 
+          },
         },
         visualMap: {
           min: 0,
@@ -211,7 +242,8 @@ const MapChart = ({
               const t = Number.isFinite(tms) ? fmtTime(tms) : "—";
               return `Time: ${t}<br/>Speed: ${Number(speed).toFixed(1)} km/h`;
             }
-            if (p.seriesName === "Gates") return `Gate: ${p.name || ""}`;
+            // --- CHANGED: Return nothing for gates so no tooltip appears ---
+            if (p.seriesName === "Gates") return ""; 
             return "";
           },
         },

@@ -16,10 +16,6 @@ import LapTimesPanel from "../pages/MQTT/MoreCharts/Charts/LapTimesPanel";
 
 // --- CONSTANTS ---
 const MAX_SIGNALS = 5;
-const ACCEL_SENS = 16384.0; // LSB per g
-const GYRO_SENS = 131.0;    // LSB per deg/s
-const G_TO_MS2 = 9.80665;
-const DEG_TO_RAD = Math.PI / 180.0;
 
 // --- HELPERS (File Loading) ---
 const readBlobAsText = (blob) => {
@@ -168,6 +164,7 @@ const rawData = useMemo(() => {
     const [gatesData, setGatesData] = useState([]);
     const [selectedTs, setSelectedTs] = useState(null);
     const [selectedLap, setSelectedLap] = useState(null);
+    const [selectedTurn, setSelectedTurn] = useState(null);
 
     // Chart Builder State
     const [staged, setStaged] = useState([]);
@@ -329,6 +326,8 @@ useEffect(() => {
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
+
+        console.log(out)
         // --- Inside your allSeries useMemo ---
         const tp = new TelemetryProcessor();
 
@@ -394,6 +393,8 @@ useEffect(() => {
         out["Acceleration_on_X_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAx[i]]);
         out["Acceleration_on_Y_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAy[i]]);
         out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
+
+        console.log(fileData)
         return out;
     }, [rawData, fileData]);
 
@@ -680,6 +681,22 @@ const speedVsDistance = useMemo(() => {
                     ))}
                 </select>
             </div>
+
+            {/* Turn selector */}
+            <div className="rounded-lg bg-white p-4 shadow">
+                <h3 className="font-medium text-gray-700 mb-2">Choose Turn</h3>
+                <select
+                    className="w-full border-gray-300 rounded-md"
+                    value={selectedLap ?? ""}
+                    onChange={(e) => setSelectedLap(e.target.value === "" ? null : Number(e.target.value))}
+                >
+                    <option value="">All laps</option>
+                    {gatesArray.map((g, i) => (
+                        <option key={i} value={i}>{g.label}</option>
+                    ))}
+                </select>
+            </div>
+
 
             {/* Map */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">

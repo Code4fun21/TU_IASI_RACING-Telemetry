@@ -113,6 +113,18 @@ const gatePoints = useMemo(() => {
       // Find the middle index to attach the label to
       const centerIndex = Math.floor(count / 2);
 
+      // --- COLOR LOGIC: 'T' for Turn, 'S' for Sector ---
+      let pointColor = gate.color || "#9ca3af"; // Default to gray if no match or prop color
+
+      if (!gate.color && name) {
+          const firstChar = name.trim().charAt(0).toUpperCase();
+          if (firstChar === 'T') {
+              pointColor = "#6b7280"; // Red for Turns
+          } else if (firstChar === 'S') {
+              pointColor = "#f63b3b"; // Blue for Sectors
+          }
+      }
+
       for (let i = 0; i <= count; i++) {
         const t = count === 0 ? 0 : i / count;
         const lon = lon1 + (lon2 - lon1) * t;
@@ -136,7 +148,7 @@ const gatePoints = useMemo(() => {
             borderRadius: 3
           },
           itemStyle: { 
-            color: gate.color || "#ef4444" 
+            color: pointColor // Apply the calculated color here
           }
         });
       }

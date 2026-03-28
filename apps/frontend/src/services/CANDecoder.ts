@@ -598,74 +598,96 @@ export class CANDecoder {
 
 
     // --- LAP LOGIC ---
-    checkCross(time: number, curr: GPSPoint) {
-        if (!this.prevPos) return;
-        const prev = this.prevPos;
-        const dist = this.haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+checkCross(time: number, curr: GPSPoint) {
+    if (!this.prevPos) return;
+    const prev = this.prevPos;
+    const dist = this.haversine(prev.lat, prev.lon, curr.lat, curr.lon);
 
-        // A. Check S0 (Start/Finish Line)
-        if (this.gateCheckers["S0"]) {
-            const s0 = this.gateCheckers["S0"];
-            s0.update_points(prev, curr);
-            
-            if (s0.get_intersection_time()) {
-                const t0 = s0.get_time();
-                
-                // Lap Complete Logic
-                if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
-                    this.currentLap["S3"] = t0; 
-                    this.currentLap["complete"] = true;
-                    this.currentLap["dist"] = this.trackLen;
-                    this.currentLap["ts"] = t0; 
-                    this.currentLap["lap"] = this.lapCount; 
+    // 1. Check Turn Gates FIRST 
+    // This ensures Turn data is in the object BEFORE S0 archives the lap.
+    Object.keys(this.gateCheckers).forEach(gateName => {
+        if (gateName.startsWith("T")) {
+            // Only check if we haven't already crossed this specific turn gate this lap
+            if (!this.currentLap[gateName]) {
+                const turnGate = this.gateCheckers[gateName];
+                turnGate.update_points(prev, curr);
 
-                    this.lapsHistory.push({ ...this.currentLap });
-                    console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
-                    
-                    this.lapCount++;
-                    this.currentLap = { "S0": t0 };
-                    this.trackLen = 0;
-                    this.gateIdx = 1;
-                    this.justS0 = true;
-                } 
-                // Session Start Logic
-                else if (t0 && !this.currentLap["S0"]) {
-                    this.lapCount = 1;
-                    this.currentLap = { "S0": t0 };
-                    this.trackLen = 0;
-                    this.gateIdx = 1;
-                    this.justS0 = true;
-                    console.log("Session Started at S0");
-                }
-            }
-        }
-
-        // B. Check Sectors (S1, S2)
-        const seq = ["S0", "S1", "S2"];
-        if (this.gateIdx > 0 && this.gateIdx < seq.length) {
-            const targetGate = seq[this.gateIdx];
-            if (this.gateCheckers[targetGate]) {
-                const g = this.gateCheckers[targetGate];
-                g.update_points(prev, curr);
-                
-                if (g.get_intersection_time()) {
-                    const t = g.get_time();
-                    if (t) {
-                        this.currentLap[targetGate] = t;
-                        console.log(`Crossed ${targetGate}`);
-                        this.gateIdx++;
+                if (turnGate.get_intersection_time()) {
+                    const tTurn = turnGate.get_time();
+                    if (tTurn) {
+                        this.currentLap[gateName] = tTurn;
+                        console.log(`Crossed Turn Gate: ${gateName} at ${tTurn}`);
                     }
                 }
             }
         }
+    });
 
-        // C. Accumulate Distance
-        if (this.gateIdx > 0 && !this.justS0) {
-            this.trackLen += dist;
+    // 2. Check S0 (Start/Finish Line)
+    if (this.gateCheckers["S0"]) {
+        const s0 = this.gateCheckers["S0"];
+        s0.update_points(prev, curr);
+        
+        if (s0.get_intersection_time()) {
+            const t0 = s0.get_time();
+            
+            // Lap Complete Logic
+            if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
+                this.currentLap["S3"] = t0; 
+                this.currentLap["complete"] = true;
+                this.currentLap["dist"] = this.trackLen;
+                this.currentLap["ts"] = t0; 
+                this.currentLap["lap"] = this.lapCount; 
+
+                // All turns caught in Step 1 are now safely pushed into history
+                this.lapsHistory.push({ ...this.currentLap });
+                console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
+                
+                this.lapCount++;
+                this.currentLap = { "S0": t0 }; // Reset for next lap
+                this.trackLen = 0;
+                this.gateIdx = 1;
+                this.justS0 = true;
+            } 
+            // Session Start Logic
+            else if (t0 && !this.currentLap["S0"]) {
+                this.lapCount = 1;
+                this.currentLap = { "S0": t0 };
+                this.trackLen = 0;
+                this.gateIdx = 1;
+                this.justS0 = true;
+                console.log("Session Started at S0");
+            }
         }
-        this.justS0 = false;
     }
 
+    // 3. Check Sectors (S1, S2)
+    const seq = ["S0", "S1", "S2"];
+    if (this.gateIdx > 0 && this.gateIdx < seq.length) {
+        const targetGate = seq[this.gateIdx];
+        if (this.gateCheckers[targetGate]) {
+            const g = this.gateCheckers[targetGate];
+            g.update_points(prev, curr);
+            
+            if (g.get_intersection_time()) {
+                const t = g.get_time();
+                if (t) {
+                    this.currentLap[targetGate] = t;
+                    console.log(`Crossed ${targetGate}`);
+                    this.gateIdx++;
+                }
+            }
+        }
+    }
+
+    // 4. Accumulate Distance and Update State
+    // Consolidated the logic to prevent double distance accumulation
+    if (this.gateIdx > 0 && !this.justS0) {
+        this.trackLen += dist;
+    }
+    this.justS0 = false;
+    this.prevPos = curr; 
+}
     getGatesData() {
         return {
             timestamps: this.lapsHistory.map(l => l.ts || 0),

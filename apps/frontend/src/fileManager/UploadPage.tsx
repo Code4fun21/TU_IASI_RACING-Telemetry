@@ -6,7 +6,7 @@ import RaceTrackSelect from "../pages/MQTT/Components/RaceTrackSelect";
 import MapChartEditable from '../components/MapChartEditable';
 import * as turf from '@turf/turf';
 import { TbArrowsRightLeft } from "react-icons/tb";
-import { processTrackGeometry } from '../services/gateIdentifier';
+import { processTrackGeometry,getSectorIndices } from '../services/gateIdentifier';
 
 interface Gate {
   name: string;
@@ -99,7 +99,7 @@ export default function UploadPage() {
       lat2: point2.geometry.coordinates[1],
       lon2: point2.geometry.coordinates[0],
       isPreview: false,
-      color: '#6b7280'
+      
     };
   };
 
@@ -340,13 +340,14 @@ const generateFSKinematicGates = () => {
   const N = leftCoords.length;
 
   const zones = processTrackGeometry(previewLayout);
-  console.log(zones)
+  const sectors=getSectorIndices(previewLayout.features[0].geometry.coordinates,previewLayout.features[1].geometry.coordinates,zones)
+  console.log(zones,sectors)
   if (!zones || zones.length === 0) return;
 
   const finalGates: Gate[] = [];
 
   zones.forEach((zone: any, index: number) => {
-    const maneuverName = `T${index + 1}`;
+    const maneuverName = `T${index + 1}-${zone.label}`;
 
     const startIdx = zone.startIndex % N;
     const endIdx = zone.endIndex % N;
@@ -356,6 +357,19 @@ const generateFSKinematicGates = () => {
     
     finalGates.push(gIn, gOut);
   });
+
+    if (!sectors || sectors.length === 0) return;
+
+
+  sectors.forEach((sector: any, index: number) => {
+    const sector_name=`S${index}`;
+
+    const sectorGate=createPerpendicularGate(leftCoords[sector],leftCoords[(sector + 1) % N],sector_name)
+
+    
+    finalGates.push(sectorGate);
+  });
+
 
   setPreviewGates(finalGates);
 };
@@ -732,7 +746,7 @@ const generateFSKinematicGates = () => {
                       onClick={openTrackSelector}
                       className="text-xs bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded transition-colors"
                     >
-                      📂 Edit Existing
+                      Edit Existing
                     </button>
                   </div>
 

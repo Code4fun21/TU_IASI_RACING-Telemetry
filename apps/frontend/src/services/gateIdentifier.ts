@@ -6,9 +6,10 @@ interface Zone {
     points: number[][];
     distance: number;
     totalRotation: number;
+    label: string;
 }
 
-export const processTrackGeometry = (geoData:any) => {
+export const processTrackGeometry = (geoData: any) => {
     const outerCoords = geoData.features[0].geometry.coordinates;
     const innerCoords = geoData.features[1].geometry.coordinates;
 
@@ -69,7 +70,7 @@ const detectRawZones = (scores: number[], tau: number, l: number) => {
 
     for (let i = 0; i < scores.length; i++) {
         if (!current && scores[i] > tau) {
-            current = { start: i-12, end: i, maxScore: scores[i] };
+            current = { start: i - 12, end: i, maxScore: scores[i] };
         } else if (current) {
             current.maxScore = Math.max(current.maxScore, scores[i]);
             const start = Math.max(0, i - l);
@@ -78,7 +79,7 @@ const detectRawZones = (scores: number[], tau: number, l: number) => {
             const avg = window.reduce((a, b) => a + b, 0) / window.length;
 
             if (avg < tau * 0.2) {
-                current.end = i-6;
+                current.end = i - 6;
                 zones.push({ ...current });
                 current = null;
             }
@@ -133,9 +134,10 @@ const mergeZones = (zones: any[], bridge: number) => {
 
 const finalizeZones = (zones: any[], centerline: number[][]): Zone[] => {
     return zones.map(z => {
-        const slice = centerline.slice(z.start, z.end);
-        
+        const slice = centerline.slice(Math.max(0, z.start), z.end);
+        const deltas: number[] = [];
         let rotation = 0;
+
         for (let i = 0; i < slice.length - 2; i++) {
             const a = slice[i];
             const b = slice[i + 1];
@@ -145,15 +147,93 @@ const finalizeZones = (zones: any[], centerline: number[][]): Zone[] => {
             let diff = ang2 - ang1;
             if (diff > Math.PI) diff -= 2 * Math.PI;
             if (diff < -Math.PI) diff += 2 * Math.PI;
+            
+            deltas.push(diff);
             rotation += Math.abs(diff);
         }
+
+        const type = classifyTurnType(deltas);
 
         return {
             startIndex: z.start,
             endIndex: z.end,
             points: slice,
             distance: slice.length * 0.5,
-            totalRotation: rotation
+            totalRotation: rotation,
+            label: type
         };
     }).filter(z => z.distance >= 5 && z.totalRotation > 0.4);
+};
+
+const classifyTurnType = (deltas: number[]) => {
+    let flips = 0;
+    let lastSignificantSign = 0;
+    const threshold = 0.015; // Increased sensitivity floor
+
+    for (const d of deltas) {
+        // Only consider a point if it's "hard" steering
+        if (Math.abs(d) > threshold) {
+            const currentSign = Math.sign(d);
+            
+            // If we changed direction significantly
+            if (lastSignificantSign !== 0 && currentSign !== lastSignificantSign) {
+                flips++;
+            }
+            lastSignificantSign = currentSign;
+        }
+    }
+
+    if (flips >= 3) return "SLALOM";
+    if (flips === 2) return "CHICANE";
+    return "CORNER";
+};
+
+
+export const getSectorIndices = (outer: number[][], inner: number[][], zones: Zone[]): number[] => {
+    const centerline = outer.map((p, i) => {
+        const p2 = inner[Math.min(i, inner.length - 1)];
+        return [(p[0] + p2[0]) / 2, (p[1] + p2[1]) / 2];
+    });
+
+    let totalDist = 0;
+    const cumulativeDist = [0];
+    for (let i = 0; i < centerline.length - 1; i++) {
+        const d = Math.sqrt(
+            Math.pow(centerline[i + 1][0] - centerline[i][0], 2) + 
+            Math.pow(centerline[i + 1][1] - centerline[i][1], 2)
+        );
+        totalDist += d;
+        cumulativeDist.push(totalDist);
+    }
+
+    const findOptimalIndex = (targetDist: number) => {
+        let idx = cumulativeDist.findIndex(d => d >= targetDist);
+        if (idx === -1) idx = centerline.length - 1;
+
+        // Increased buffer to ensure visual separation (approx 10 meters)
+        const safetyBuffer = 20; 
+
+        const isNearCorner = (index: number) => 
+            zones.some(z => index >= (z.startIndex - safetyBuffer) && index <= (z.endIndex + safetyBuffer));
+
+        if (isNearCorner(idx)) {
+            let step = 1;
+            const maxSearch = Math.floor(centerline.length / 4); 
+            while (step < maxSearch) {
+                // Try looking forward then backward for a clean straight
+                if (idx + step < centerline.length && !isNearCorner(idx + step)) return idx + step;
+                if (idx - step >= 0 && !isNearCorner(idx - step)) return idx - step;
+                step++;
+            }
+        }
+        return idx;
+    };
+
+    // S0 is usually start/finish. If T9 (last turn) overlaps index 0, 
+    // we can also apply the search to S0 to shift it to a clean spot.
+    const s0 = findOptimalIndex(0); 
+    const s1 = findOptimalIndex(totalDist * 0.33);
+    const s2 = findOptimalIndex(totalDist * 0.66);
+
+    return [s0, s1, s2];
 };
