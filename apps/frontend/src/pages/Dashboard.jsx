@@ -215,7 +215,6 @@ useEffect(() => {
                 "Manifold_air_temperature": "manifoldAirTemp", "GPS_Latitude": "GPS_Latitude",
                 "GPS_Longitude": "GPS_Longitude", "GPS_Speed": "GPS_Speed", "ECU_time": "timestamp",
                 
-                "Acceleration_on_X_axis": "accelerationX", "Acceleration_on_Y_axis": "accelerationY", "Acceleration_on_Z_axis": "accelerationZ", 
                 "Gyroscope_on_X_axis": "gyroX", "Gyroscope_on_Y_axis": "gyroY", "Gyroscope_on_Z_axis": "gyroZ",
                 
                 "Brake_Pressure": "brakePressure", "Gear": "gear", "Steering_Angle": "steering",
@@ -230,20 +229,16 @@ useEffect(() => {
                 "Sync_loss_counter": "sync-lossCounter", "Sync_loss_reason_code": "sync-lossReasonCode",
                 "Average_fuel_flow": "averageFuelFlow",
                 "Distance": "Distance",
-                "Acceleration_on_X_axis_KF": "accelerationX_KF", 
-                "Acceleration_on_Y_axis_KF": "accelerationY_KF", 
-                "Acceleration_on_Z_axis_KF": "accelerationZ_KF", 
+                "Acceleration_on_X_axis_rotated": "accelerationX_rotated", 
+                "Acceleration_on_Y_axis_rotated": "accelerationY_rotated", 
+                "Acceleration_on_Z_axis_rotated": "accelerationZ_rotated", 
                 
-                "Gyroscope_on_X_axis_KF": "gyroX_KF", 
-                "Gyroscope_on_Y_axis_KF": "gyroY_KF", 
-                "Gyroscope_on_Z_axis_KF": "gyroZ_KF",
+                
                 "Acceleration_on_X_axis_RAW": "accelerationX_RAW", 
                 "Acceleration_on_Y_axis_RAW": "accelerationY_RAW", 
                 "Acceleration_on_Z_axis_RAW": "accelerationZ_RAW", 
                 
-                "Gyroscope_on_X_axis_RAW": "gyroX_RAW", 
-                "Gyroscope_on_Y_axis_RAW": "gyroY_RAW", 
-                "Gyroscope_on_Z_axis_RAW": "gyroZ_RAW",
+                
             };
             const sourceKey = keyMap[targetKey] || targetKey;
 
@@ -283,9 +278,7 @@ useEffect(() => {
             GPS_Latitude: extract("GPS_Latitude"), 
             GPS_Longitude: extract("GPS_Longitude"), 
             GPS_Speed: extract("GPS_Speed"),
-            Acceleration_on_X_axis: extract("Acceleration_on_X_axis"), 
-            Acceleration_on_Y_axis: extract("Acceleration_on_Y_axis"),
-            Acceleration_on_Z_axis: extract("Acceleration_on_Z_axis"), 
+            
             Gyroscope_on_X_axis: extract("Gyroscope_on_X_axis"),
             Gyroscope_on_Y_axis: extract("Gyroscope_on_Y_axis"), 
             Gyroscope_on_Z_axis: extract("Gyroscope_on_Z_axis"),
@@ -311,90 +304,86 @@ useEffect(() => {
             Sync_loss_reason_code: extract("Sync_loss_reason_code"),
             Average_fuel_flow: extract("Average_fuel_flow"),
             Distance: extract("Distance"),
-            Acceleration_on_X_axis_KF: extract("Acceleration_on_X_axis_KF"), 
-            Acceleration_on_Y_axis_KF: extract("Acceleration_on_Y_axis_KF"),
-            Acceleration_on_Z_axis_KF: extract("Acceleration_on_Z_axis_KF"), 
-            Gyroscope_on_X_axis_KF: extract("Gyroscope_on_X_axis_KF"),
-            Gyroscope_on_Y_axis_KF: extract("Gyroscope_on_Y_axis_KF"), 
-            Gyroscope_on_Z_axis_KF: extract("Gyroscope_on_Z_axis_KF"),
+            Acceleration_on_X_axis_rotated: extract("Acceleration_on_X_axis_rotated"), 
+            Acceleration_on_Y_axis_rotated: extract("Acceleration_on_Y_axis_rotated"),
+            Acceleration_on_Z_axis_rotated: extract("Acceleration_on_Z_axis_rotated"), 
+            
             Acceleration_on_X_axis_RAW: extract("Acceleration_on_X_axis_RAW"), 
             Acceleration_on_Y_axis_RAW: extract("Acceleration_on_Y_axis_RAW"),
             Acceleration_on_Z_axis_RAW: extract("Acceleration_on_Z_axis_RAW"), 
-            Gyroscope_on_X_axis_RAW: extract("Gyroscope_on_X_axis_RAW"),
-            Gyroscope_on_Y_axis_RAW: extract("Gyroscope_on_Y_axis_RAW"), 
-            Gyroscope_on_Z_axis_RAW: extract("Gyroscope_on_Z_axis_RAW"),
+           
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
 
         console.log(out)
         // --- Inside your allSeries useMemo ---
-        const tp = new TelemetryProcessor();
+//         const tp = new TelemetryProcessor();
 
-        // 1. Setup Alignment & Jitter Correction
-        const accelSeries = out["Acceleration_on_X_axis_KF"] || [];
-        const gpsSeries = out["GPS_Speed"] || [];
+//         // 1. Setup Alignment & Jitter Correction
+//         const accelSeries = out["Acceleration_on_X_axis_KF"] || [];
+//         const gpsSeries = out["GPS_Speed"] || [];
 
-        let fs = 20; // Default fallback
-        if (accelSeries.length > 1) {
-            let tsDiff = accelSeries[accelSeries.length - 1][0] - accelSeries[0][0];
+//         let fs = 20; // Default fallback
+//         if (accelSeries.length > 1) {
+//             let tsDiff = accelSeries[accelSeries.length - 1][0] - accelSeries[0][0];
             
-            // Auto-detect if timestamps are milliseconds (e.g., 840,000) or seconds (e.g., 840)
-            let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
+//             // Auto-detect if timestamps are milliseconds (e.g., 840,000) or seconds (e.g., 840)
+//             let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
             
-            fs = accelSeries.length / durationSeconds;
+//             fs = accelSeries.length / durationSeconds;
             
-            // Ultimate safety net: If math goes crazy, force it back to 20Hz
-            if (fs < 5 || fs > 500) fs = 20; 
-}
+//             // Ultimate safety net: If math goes crazy, force it back to 20Hz
+//             if (fs < 5 || fs > 500) fs = 20; 
+// }
 
-        const correctedAx = [];
-        const correctedAy = [];
+//         const correctedAx = [];
+//         const correctedAy = [];
 
-        // 2. Linear Interpolation Helper for GPS Speed
-        const getInterpolatedSpeed = (targetTs) => {
-            if (gpsSeries.length === 0) return 0;
-            const nextIdx = gpsSeries.findIndex(p => p[0] >= targetTs);
-            if (nextIdx <= 0) return gpsSeries[0]?.[1] || 0;
+//         // 2. Linear Interpolation Helper for GPS Speed
+//         const getInterpolatedSpeed = (targetTs) => {
+//             if (gpsSeries.length === 0) return 0;
+//             const nextIdx = gpsSeries.findIndex(p => p[0] >= targetTs);
+//             if (nextIdx <= 0) return gpsSeries[0]?.[1] || 0;
             
-            const p1 = gpsSeries[nextIdx - 1];
-            const p2 = gpsSeries[nextIdx];
-            const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
-            return p1[1] + tRatio * (p2[1] - p1[1]);
-        };
+//             const p1 = gpsSeries[nextIdx - 1];
+//             const p2 = gpsSeries[nextIdx];
+//             const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
+//             return p1[1] + tRatio * (p2[1] - p1[1]);
+//         };
 
-        // 3. The Combined Processing Loop
-        for (let i = 0; i < accelSeries.length; i++) {
-            const [ts, axRaw] = accelSeries[i];
-            const ayRaw = out["Acceleration_on_Y_axis_KF"]?.[i]?.[1] || 0;
-            const azRaw = out["Acceleration_on_Z_axis_KF"]?.[i]?.[1] || 1; // Default 1G
-            // Change "gyroZ" to the correct key
-            const gzRaw = out["Gyroscope_on_Z_axis_KF"]?.[i]?.[1] || 0;
+//         // 3. The Combined Processing Loop
+//         for (let i = 0; i < accelSeries.length; i++) {
+//             const [ts, axRaw] = accelSeries[i];
+//             const ayRaw = out["Acceleration_on_Y_axis_KF"]?.[i]?.[1] || 0;
+//             const azRaw = out["Acceleration_on_Z_axis_KF"]?.[i]?.[1] || 1; // Default 1G
+//             // Change "gyroZ" to the correct key
+//             const gzRaw = out["Gyroscope_on_Z_axis_KF"]?.[i]?.[1] || 0;
             
-            // Rule 4: Get speed aligned exactly to MPU timestamp
-            const speed = getInterpolatedSpeed(ts);
+//             // Rule 4: Get speed aligned exactly to MPU timestamp
+//             const speed = getInterpolatedSpeed(ts);
 
-            // Rule 1: Centripetal Correction
-            let ayClean = tp.removeCentripetal(ayRaw, gzRaw, speed);
+//             // Rule 1: Centripetal Correction
+//             let ayClean = tp.removeCentripetal(ayRaw, gzRaw, speed);
 
-            // Rule 3: Roll Compensation
-            const ayCorrected = tp.compensateRoll(ayClean, azRaw, 3.0); // Assume 3 deg/G roll gradient
+//             // Rule 3: Roll Compensation
+//             const ayCorrected = tp.compensateRoll(ayClean, azRaw, 3.0); // Assume 3 deg/G roll gradient
 
-            correctedAx.push(axRaw);
-            correctedAy.push(ayCorrected);
-        }
+//             correctedAx.push(axRaw);
+//             correctedAy.push(ayCorrected);
+//         }
 
-        // 4. Rule 2: Adaptive Final Pass
-        const fcX = tp.getAdaptiveFc(correctedAx, 5);
-        const finalAx = tp.bw.filtFilt(correctedAx, fs, fcX);
-        const finalAy = tp.bw.filtFilt(correctedAy, fs, 5);
+//         // 4. Rule 2: Adaptive Final Pass
+//         const fcX = tp.getAdaptiveFc(correctedAx, 5);
+//         const finalAx = tp.bw.filtFilt(correctedAx, fs, fcX);
+//         const finalAy = tp.bw.filtFilt(correctedAy, fs, 5);
 
-        // 5. Map back
-        out["Acceleration_on_X_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAx[i]]);
-        out["Acceleration_on_Y_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAy[i]]);
+//         // 5. Map back
+//         out["Acceleration_on_X_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAx[i]]);
+//         out["Acceleration_on_Y_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAy[i]]);
         out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
 
-        console.log(fileData)
+//         console.log(fileData)
         return out;
     }, [rawData, fileData]);
 
@@ -654,30 +643,21 @@ const speedVsDistance = useMemo(() => {
         ["Sync Loss Count", "Sync_loss_counter", "cnt"], ["Sync Loss Reason", "Sync_loss_reason_code", "code"],
         ["Avg Fuel Flow", "Average_fuel_flow", "cc/min"],
 
-        ["Accel X (LPF)", "Acceleration_on_X_axis", "G"], 
-        ["Accel Y (LPF)", "Acceleration_on_Y_axis", "G"],
-        ["Accel Z (LPF)", "Acceleration_on_Z_axis", "G"],
         
-        ["Accel X (Kalman)", "Acceleration_on_X_axis_KF", "G"], 
-        ["Accel Y (Kalman)", "Acceleration_on_Y_axis_KF", "G"],
-        ["Accel Z (Kalman)", "Acceleration_on_Z_axis_KF", "G"],
+        ["Accel X (rotated)", "Acceleration_on_X_axis_rotated", "G"], 
+        ["Accel Y (rotated)", "Acceleration_on_Y_axis_rotated", "G"],
+        ["Accel Z (rotated)", "Acceleration_on_Z_axis_rotated", "G"],
 
         ["Accel X (RAW)", "Acceleration_on_X_axis_RAW", "G"], 
         ["Accel Y (RAW)", "Acceleration_on_Y_axis_RAW", "G"],
         ["Accel Z (RAW)", "Acceleration_on_Z_axis_RAW", "G"],
         
 
-        ["Gyro X (LPF)", "Gyroscope_on_X_axis", "rad/s"],
-        ["Gyro Y (LPF)", "Gyroscope_on_Y_axis", "rad/s"], 
-        ["Gyro Z (LPF)", "Gyroscope_on_Z_axis", "rad/s"],
+       
 
-        ["Gyro X (Kalman)", "Gyroscope_on_X_axis_KF", "rad/s"],
-        ["Gyro Y (Kalman)", "Gyroscope_on_Y_axis_KF", "rad/s"], 
-        ["Gyro Z (Kalman)", "Gyroscope_on_Z_axis_KF", "rad/s"],
-
-        ["Gyro X (RAW)", "Gyroscope_on_X_axis_RAW", "rad/s"],
-        ["Gyro Y (RAW)", "Gyroscope_on_Y_axis_RAW", "rad/s"], 
-        ["Gyro Z (RAW)", "Gyroscope_on_Z_axis_RAW", "rad/s"],
+        ["Gyro X (RAW)", "Gyroscope_on_X_axis", "rad/s"],
+        ["Gyro Y (RAW)", "Gyroscope_on_Y_axis", "rad/s"], 
+        ["Gyro Z (RAW)", "Gyroscope_on_Z_axis", "rad/s"],
     ];
 
     const signalsCatalog = useMemo(() => {
@@ -928,18 +908,18 @@ const speedVsDistance = useMemo(() => {
                     series={[
                         {
                             name: "Accel X", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_X_axis),
-                            data: filtered.Acceleration_on_X_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_X_axis_rotated),
+                            data: filtered.Acceleration_on_X_axis_rotated?.map(pt => pt[1]) || []
                         },
                         {
                             name: "Accel Y", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Y_axis),
-                            data: filtered.Acceleration_on_Y_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_Y_axis_RAW),
+                            data: filtered.Acceleration_on_Y_axis_RAW?.map(pt => pt[1]) || []
                         },
                         {
                             name: "Accel Z", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Z_axis),
-                            data: filtered.Acceleration_on_Z_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_Z_axis_RAW),
+                            data: filtered.Acceleration_on_Z_axis_RAW?.map(pt => pt[1]) || []
                         }
                     ]}
                 />

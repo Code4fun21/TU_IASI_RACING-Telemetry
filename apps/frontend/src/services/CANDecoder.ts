@@ -90,48 +90,52 @@ class LowPassFilter {
     }
 }
 
-class HampelFilter {
-    windowSize: number;
-    threshold: number; // Usually 3 (3-sigma rule)
-    buffer: number[] = [];
-    PHYSICAL_IMPOSSIBILITY_LIMIT = 5.0;
+class StaticCalibrator {
+    pitch: number = 0;
+    roll: number = 0;
+    isCalibrated: boolean = false;
+    bufferX: number[] = [];
+    bufferY: number[] = [];
 
-    constructor(windowSize: number = 7, threshold: number = 3) {
-        this.windowSize = windowSize;
-        this.threshold = threshold;
+    update(x: number, y: number, speed: number) {
+        if (this.isCalibrated) return;
+        
+        // Wait until car is stopped to collect 50 samples
+        if (speed > 1.0) {
+            this.bufferX = [];
+            this.bufferY = [];
+            return;
+        }
+
+        this.bufferX.push(x);
+        this.bufferY.push(y);
+
+        if (this.bufferX.length >= 50) {
+            const meanX = this.bufferX.reduce((a, b) => a + b, 0) / 50;
+            const meanY = this.bufferY.reduce((a, b) => a + b, 0) / 50;
+            this.pitch = Math.asin(Math.max(-1, Math.min(1, meanX)));
+            this.roll = Math.asin(Math.max(-1, Math.min(1, meanY)));
+            this.isCalibrated = true;
+            console.log(`Decoder: Static Tilt Calibrated. Pitch: ${this.pitch.toFixed(3)}, Roll: ${this.roll.toFixed(3)}`);
+        }
     }
 
-    filter(measurement: number): number {
-        this.buffer.push(measurement);
-        if (this.buffer.length > this.windowSize) {
-            this.buffer.shift();
-        }
+    rotate(x: number, y: number, z: number): [number, number, number] {
+        // Output inverted raw data until calibration finishes
+        if (!this.isCalibrated) return [x * -1, y * -1, z]; 
 
-        if (this.buffer.length < this.windowSize) {
-            return measurement;
-        }
+        const cosP = Math.cos(this.pitch); const sinP = Math.sin(this.pitch);
+        const cosR = Math.cos(this.roll);  const sinR = Math.sin(this.roll);
 
-        // Calculate Median
-        const sorted = [...this.buffer].sort((a, b) => a - b);
-        const median = sorted[Math.floor(this.windowSize / 2)];
+        let x_leveled = x * cosP - z * sinP;
+        let z_temp    = x * sinP + z * cosP;
+        let y_leveled = y * cosR - z_temp * sinR;
+        let z_final   = y * sinR + z_temp * cosR;
 
-        // Calculate Median Absolute Deviation (MAD)
-        const deviations = this.buffer.map(val => Math.abs(val - median));
-        const sortedDeviations = [...deviations].sort((a, b) => a - b);
-        const mad = sortedDeviations[Math.floor(this.windowSize / 2)];
-
-        // Standard Deviation estimate
-        const sigma = mad * 1.4826;
-        const diff = Math.abs(measurement - median);
-        // If current value is an outlier, replace it with the median
-        if (diff > this.threshold * sigma&&diff>this.PHYSICAL_IMPOSSIBILITY_LIMIT) {
-            return median;
-        }
-
-        return measurement;
+        // Invert X and Y just like the Dashboard
+        return [x_leveled * -1, y_leveled * -1, z_final];
     }
 }
-
 // ==========================================
 // 2. LAP TIMING ALGORITHMS
 // ==========================================
@@ -319,8 +323,12 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 export class CANDecoder {
     // Dynamic Filter Storage
     filtersLPF: Record<string, LowPassFilter> = {};
-    filtersHampel: Record<string, HampelFilter> = {};
     filtersKalman: Record<string, KalmanFilter2D> = {};
+
+    calibrator = new StaticCalibrator();
+    lastAccel = [0, 0, 0];
+    lastGyro = [0, 0, 0];
+    lastImuTime = 0;
 
     ACCEL_SENS: number;
     GYRO_SENS: number;
@@ -446,35 +454,14 @@ export class CANDecoder {
                             finalVal = this.convertMethod2(rawVal, 1);
                             break;
                         case "Method_IMU_Acc":
-                            // 1. Calculate Base Value (In G-Units, not m/s²)
-                            // Removed * 9.80665 to fix the "0.0001" scaling issue
                             let baseAcc = (rawVal / this.ACCEL_SENS); 
                             baseAcc = this.handleImuBias(sig.name, baseAcc);
-                            
-                            const hampelAcc = this.applyHampel(sig.name, baseAcc, 3, 4);                           
-                            decodedValues[sig.name + "_KF"] = Number(hampelAcc.toFixed(6));
-
-                            // 2. Standard Path (LPF) -> Goes to 'accelerationX'
-                            finalVal = this.applyLPF(sig.name, baseAcc);
-
-                            // 3. Secondary Path (Kalman) -> Goes to 'accelerationX_KF'
-                            const kfAcc = this.applyKalman(sig.name, baseAcc, timestamp);
-                            // decodedValues[sig.name + "_KF"] = Number(kfAcc.toFixed(6));
                             decodedValues[sig.name + "_RAW"] = Number(baseAcc);
                             break;
 
                         case "Method_IMU_Gyro":
-                            // 1. Calculate Base Value (Radians/s)
                             let baseGyro = (rawVal / this.GYRO_SENS) * (Math.PI / 180.0);
                             baseGyro = this.handleImuBias(sig.name, baseGyro);
-                            const hampelGyro = this.applyHampel(sig.name, baseGyro, 2, 5);                           
-                            decodedValues[sig.name + "_KF"] = Number(hampelGyro.toFixed(6));
-                            // 2. Standard Path (LPF) -> Goes to 'gyroX'
-                            finalVal = this.applyLPF(sig.name, baseGyro);
-
-                            // 3. Secondary Path (Kalman) -> Goes to 'gyroX_KF'
-                            const kfGyro = this.applyKalman(sig.name, baseGyro, timestamp);
-                            // decodedValues[sig.name + "_KF"] = Number(kfGyro.toFixed(6));
                             decodedValues[sig.name + "_RAW"] = Number(baseGyro);
                             break;
                     }
@@ -493,6 +480,42 @@ export class CANDecoder {
                 decodedValues[sig.name] = Number(finalVal.toFixed(6));
             }
 
+            if (canId === "0118") {
+                this.lastAccel = [
+                    decodedValues["accelerationX_RAW"] !== undefined ? decodedValues["accelerationX_RAW"] : this.lastAccel[0],
+                    decodedValues["accelerationY_RAW"] !== undefined ? decodedValues["accelerationY_RAW"] : this.lastAccel[1],
+                    decodedValues["accelerationZ_RAW"] !== undefined ? decodedValues["accelerationZ_RAW"] : this.lastAccel[2]
+                ];
+
+                const currentSpeed = this.currPos ? this.currPos.speed : 0;
+                
+                // 1. Update Calibration (Only runs when speed < 1.0)
+                this.calibrator.update(this.lastAccel[0], this.lastAccel[1], currentSpeed);
+
+                // 2. Rotate the Raw Data
+                const [rx, ry, rz] = this.calibrator.rotate(this.lastAccel[0], this.lastAccel[1], this.lastAccel[2]);
+
+                // 3. Apply Kalman Filter to the Leveled Data
+                decodedValues["accelerationX_rotated"] = Number(this.applyKalman("accX_leveled", rx, timestamp).toFixed(6));
+                decodedValues["accelerationY_rotated"] = Number(this.applyKalman("accY_leveled", ry, timestamp).toFixed(6));
+                decodedValues["accelerationZ_rotated"] = Number(this.applyKalman("accZ_leveled", rz, timestamp).toFixed(6));
+
+            } else if (canId === "0119") {
+                this.lastGyro = [
+                    decodedValues["gyroX_RAW"] !== undefined ? decodedValues["gyroX_RAW"] : this.lastGyro[0],
+                    decodedValues["gyroY_RAW"] !== undefined ? decodedValues["gyroY_RAW"] : this.lastGyro[1],
+                    decodedValues["gyroZ_RAW"] !== undefined ? decodedValues["gyroZ_RAW"] : this.lastGyro[2]
+                ];
+
+                // 1. Rotate the Gyro Data (Uses the same pitch/roll from the Accel calibration)
+                const [rx, ry, rz] = this.calibrator.rotate(this.lastGyro[0], this.lastGyro[1], this.lastGyro[2]);
+
+                // 2. Apply Kalman Filter to the Leveled Gyro Data
+                decodedValues["gyroX_rotated"] = Number(this.applyKalman("gyroX_leveled", rx, timestamp).toFixed(6));
+                decodedValues["gyroY_rotated"] = Number(this.applyKalman("gyroY_leveled", ry, timestamp).toFixed(6));
+                decodedValues["gyroZ_rotated"] = Number(this.applyKalman("gyroZ_leveled", rz, timestamp).toFixed(6));
+            }
+
             // --- GPS POSITION & LAP TRACKING ---
             if (decodedValues["GPS_Latitude"] && decodedValues["GPS_Longitude"]) {
                 const lat = decodedValues["GPS_Latitude"];
@@ -508,6 +531,8 @@ export class CANDecoder {
                 this.prevPos = this.currPos;
             }
             decodedValues["Distance"] = this.trackLen;
+
+
 
             return { timestamp, canId, ...decodedValues, Distance: this.trackLen };
 
@@ -587,14 +612,7 @@ export class CANDecoder {
             this.filtersLPF[name] = new LowPassFilter(0.15); // Alpha 0.15 = Smooth charts
         }
         return this.filtersLPF[name].filter(val);
-    }
-
-    applyHampel(name: string, val: number, windowSize: number = 10, threshold: number = 3): number {
-            if (!this.filtersHampel[name]) {
-                this.filtersHampel[name] = new HampelFilter(windowSize, threshold);
-            }
-            return this.filtersHampel[name].filter(val);
-    }    
+    } 
 
 
     // --- LAP LOGIC ---

@@ -22,15 +22,15 @@ const getStandardDeviation = (array, mean) => {
 // --- HELPER 1: ADVANCED CALIBRATION ROUTINE ---
 const calculateSessionCalibration = (telemetryData) => {
     if (!telemetryData || !telemetryData.GPS_Speed || !telemetryData.RPM || 
-        !telemetryData.Acceleration_on_X_axis || !telemetryData.Acceleration_on_Z_axis || !telemetryData.Acceleration_on_Y_axis) {
+        !telemetryData.Acceleration_on_X_axis_RAW || !telemetryData.Acceleration_on_Z_axis_RAW || !telemetryData.Acceleration_on_Y_axis_RAW) {
         return { x_bias: 0, y_bias: 1.0, z_bias: 0, scale: 1.0, status: "No Data" };
     }
 
     const speed = telemetryData.GPS_Speed;
     const rpm = telemetryData.RPM;
-    const accX = telemetryData.Acceleration_on_X_axis; // Long
-    const accY = telemetryData.Acceleration_on_Y_axis; // Vert (1G)
-    const accZ = telemetryData.Acceleration_on_Z_axis; // Lat
+    const accX = telemetryData.Acceleration_on_X_axis_RAW; // Long
+    const accY = telemetryData.Acceleration_on_Y_axis_RAW; // Vert (1G)
+    const accZ = telemetryData.Acceleration_on_Z_axis_RAW; // Lat
 
     const len = Math.min(speed.length, rpm.length, accX.length, accY.length, accZ.length);
     
@@ -198,77 +198,138 @@ export default function AdvanceChartsOffline() {
         return calculateSessionCalibration(telemetryData);
     }, [telemetryData]); 
 
-    // --- 4. GENERATE ALL CALIBRATED DATA (For GG Chart AND Line Charts) ---
-  
-const calibratedData = useMemo(() => {
+
+    // --- HELPER 3: UNIFORM RESAMPLING (LINEAR INTERPOLATION) ---
+// This forces jittery CAN bus data into a mathematically perfect, uniform timeline
+const resampleSeries = (series, targetFs, startTime, endTime) => {
+    if (!series || series.length === 0) return [];
     
-    const accX = filtered.Acceleration_on_X_axis; 
-    const accY = filtered.Acceleration_on_Y_axis; 
-    const accZ = filtered.Acceleration_on_Z_axis; 
+    const intervalMs = 1000 / targetFs;
+    const resampledValues = [];
+    const resampledTimes = [];
+    let currentIndex = 0;
 
-    if (!accX || !accY || !accZ || calibration.status !== "Success") return null;
-
-    const len = Math.min(accX.length, accY.length, accZ.length);
-    const pitch = Math.asin(Math.max(-1, Math.min(1, calibration.x_bias))); 
-    const roll  = Math.asin(Math.max(-1, Math.min(1, calibration.y_bias)));
-
-    const cosP = Math.cos(pitch); const sinP = Math.sin(pitch);
-    const cosR = Math.cos(roll);  const sinR = Math.sin(roll);
-
-    const rawLongVals = [];
-    const rawLatVals = [];
-    const seriesVert = [];
-    const times = [];
-
-    // STEP 1: Level the data (Remove Gravity)
-    for (let i = 0; i < len; i++) {
-        const time = accX[i][0];
-        let x = accX[i][1]; let y = accY[i][1]; let z = accZ[i][1]; 
-
-        let x_leveled = x * cosP - z * sinP;
-        let z_temp    = x * sinP + z * cosP;
-        let y_leveled = y * cosR - z_temp * sinR;
-        let z_final   = y * sinR + z_temp * cosR;
-
-        times.push(time);
-        rawLongVals.push(x_leveled * -1);
-        rawLatVals.push(y_leveled * -1);
-        seriesVert.push([time, z_final]); 
-    }
-
-    // STEP 2: Calculate actual sample rate (fs) in seconds
-    const durationSec = (times[times.length - 1] - times[0]) / 1000;
-    let fs = times.length / durationSec;
-    if (fs < 5 || fs > 500 || isNaN(fs)) fs = 20; // Fallback safety
-
-    // STEP 3: THE MAGIC - Apply a 3Hz filter to kill the engine vibration cloud
-    const filteredLong = bw.filtFilt(rawLongVals, fs, 3);
-    const filteredLat  = bw.filtFilt(rawLatVals, fs, 3);
-
-    // STEP 4: Build the final scatter points
-    const ggPoints = [];
-    const seriesLong = [];
-    const seriesLat = [];
-
-    for (let i = 0; i < len; i++) {
-        const valLong = filteredLong[i];
-        const valLat = filteredLat[i];
-
-        if (!isNaN(valLong) && !isNaN(valLat)) {
-            // Push Lat to X-axis, Long to Y-axis
-            ggPoints.push([valLat, valLong]); 
+    for (let t = startTime; t <= endTime; t += intervalMs) {
+        // Advance the index until we frame the target time 't'
+        while (currentIndex < series.length - 1 && series[currentIndex + 1][0] < t) {
+            currentIndex++;
         }
-        seriesLong.push([times[i], valLong]);
-        seriesLat.push([times[i], valLat]);
-    }
 
-    return { ggPoints, seriesLong, seriesLat, seriesVert };
-}, [filtered, calibration, bw]);
+        const p0 = series[currentIndex];
+        const p1 = series[currentIndex + 1];
+
+        resampledTimes.push(t);
+
+        if (!p1 || p0[0] === t) {
+            resampledValues.push(p0[1]); 
+        } else {
+            // Perfect Linear Interpolation
+            const ratio = (t - p0[0]) / (p1[0] - p0[0]);
+            const val = p0[1] + ratio * (p1[1] - p0[1]);
+            resampledValues.push(val);
+        }
+    }
+    return { times: resampledTimes, values: resampledValues };
+};
+
+
+
+// --- 4. GENERATE ALL CALIBRATED DATA ---
+    const calibratedData = useMemo(() => {
+        const accX = filtered.Acceleration_on_X_axis_RAW; 
+        const accY = filtered.Acceleration_on_Y_axis_RAW; 
+        const accZ = filtered.Acceleration_on_Z_axis_RAW; 
+        const gpsSeries = filtered.GPS_Speed || [];
+
+        // Safety check
+        if (!accX || !accY || !accZ || calibration.status !== "Success") return null;
+
+        // Because X, Y, Z come from the same CAN frame (0118), they are naturally aligned!
+        const len = Math.min(accX.length, accY.length, accZ.length);
+        
+        const pitch = Math.asin(Math.max(-1, Math.min(1, calibration.x_bias))); 
+        const roll  = Math.asin(Math.max(-1, Math.min(1, calibration.y_bias)));
+        const cosP = Math.cos(pitch); const sinP = Math.sin(pitch);
+        const cosR = Math.cos(roll);  const sinR = Math.sin(roll);
+
+        const rawLongVals = [];
+        const rawLatVals = [];
+        const seriesVert = [];
+        const times = [];
+        const speeds = [];
+
+        const getInterpolatedSpeed = (targetTs) => {
+            if (gpsSeries.length === 0) return 0;
+            const nextIdx = gpsSeries.findIndex(p => p[0] >= targetTs);
+            if (nextIdx <= 0) return gpsSeries[0]?.[1] || 0;
+            const p1 = gpsSeries[nextIdx - 1];
+            const p2 = gpsSeries[nextIdx];
+            
+            // Prevent divide by zero if GPS timestamps are identical
+            if (p2[0] === p1[0]) return p1[1]; 
+            
+            const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
+            return p1[1] + tRatio * (p2[1] - p1[1]);
+        };
+
+        // STEP 1: Process natively aligned data
+        for (let i = 0; i < len; i++) {
+            const time = accX[i][0];
+            let x = accX[i][1]; let y = accY[i][1]; let z = accZ[i][1]; 
+
+            let x_leveled = x * cosP - z * sinP;
+            let z_temp    = x * sinP + z * cosP;
+            let y_leveled = y * cosR - z_temp * sinR;
+            let z_final   = y * sinR + z_temp * cosR;
+
+            times.push(time);
+            speeds.push(getInterpolatedSpeed(time)); 
+            rawLongVals.push(x_leveled * -1);
+            rawLatVals.push(y_leveled * -1);
+            seriesVert.push([time, z_final]); 
+        }
+
+        // STEP 2: Calculate generic sample rate
+        let fs = 20; 
+        if (times.length > 1) {
+            let tsDiff = times[times.length - 1] - times[0];
+            let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
+            fs = times.length / durationSeconds;
+            if (fs < 5 || fs > 500) fs = 20; 
+        }
+
+        // STEP 3: Butterworth Filter (1.5 Hz cuts the vibration but keeps the cornering peaks)
+        const finalLong = bw.filtFilt(rawLongVals, fs, 1.5);
+        const finalLat = bw.filtFilt(rawLatVals, fs, 1.5);
+
+        // STEP 4: Build arrays with 30 km/h mask to keep the center clear
+        const seriesLong = [];
+        const seriesLat = [];
+        const ggPoints = [];
+
+        for (let i = 0; i < times.length; i++) {
+            seriesLong.push([times[i], finalLong[i]]);
+            seriesLat.push([times[i], finalLat[i]]);
+            
+            if (speeds[i] >= 30) {
+                ggPoints.push([finalLat[i], finalLong[i]]);
+            }
+        }
+
+        return {
+            seriesLong,
+            seriesLat,
+            seriesVert,
+            ggPoints
+        };
+    }, [filtered.Acceleration_on_X_axis_RAW, filtered.Acceleration_on_Y_axis_RAW, filtered.Acceleration_on_Z_axis_RAW, filtered.GPS_Speed, calibration, bw]);
+
+
 
     // --- GENERATE RAW G-G DATA (No Calibration) ---
     const rawGGData = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis; // Longitudinal
-        const accZ = filtered.Acceleration_on_Z_axis; // Lateral
+        const accX = filtered.Acceleration_on_X_axis_RAW; // Longitudinal
+        const accZ = filtered.Acceleration_on_Z_axis_RAW; // Lateral
 
         if (!accX || !accZ) return [];
 
@@ -286,8 +347,8 @@ const calibratedData = useMemo(() => {
     }, [filtered]);
     // --- GENERATE RAW G-G DATA (No Calibration) ---
     const rawGGData2 = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis; // Longitudinal
-        const accZ = filtered.Acceleration_on_Y_axis; // Lateral
+        const accX = filtered.Acceleration_on_X_axis_RAW; // Longitudinal
+        const accZ = filtered.Acceleration_on_Y_axis_RAW; // Lateral
 
         if (!accX || !accZ) return [];
 
@@ -370,16 +431,16 @@ const calibratedData = useMemo(() => {
             {/* G-G Diagram (Uses Calibrated Data) */}
             <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Auto-Leveled)</h3>
-                <GGChart data={calibratedData ? calibratedData.ggPoints : []} height={400} />
+                <GGChart data={calibratedData ? calibratedData.ggPoints : []} height={1000} />
             </div>
             <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Raw Data)</h3>
-                <GGChart data={rawGGData} height={400} />
+                <GGChart data={rawGGData} height={1000} />
             </div>
-            <div className="rounded-lg bg-white p-4 shadow">
+            {/* <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Raw Data)</h3>
                 <GGChart data={rawGGData2} height={400} />
-            </div>
+            </div> */}
             
             {/* Acceleration Traces (Uses Calibrated Data) */}
             <div className="rounded-lg bg-white p-4 shadow">
@@ -420,18 +481,18 @@ const calibratedData = useMemo(() => {
                     series={[
                         {
                             name: "Accel X", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_X_axis),
-                            data: filtered.Acceleration_on_X_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_X_axis_RAW),
+                            data: filtered.Acceleration_on_X_axis_RAW?.map(pt => pt[1]) || []
                         },
                         {
                             name: "Accel Y", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Y_axis),
-                            data: filtered.Acceleration_on_Y_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_Y_axis_RAW),
+                            data: filtered.Acceleration_on_Y_axis_RAW?.map(pt => pt[1]) || []
                         },
                         {
                             name: "Accel Z", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Z_axis),
-                            data: filtered.Acceleration_on_Z_axis?.map(pt => pt[1]) || []
+                            time: timeStamps(filtered.Acceleration_on_Z_axis_RAW),
+                            data: filtered.Acceleration_on_Z_axis_RAW?.map(pt => pt[1]) || []
                         }
                     ]}
                 />

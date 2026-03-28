@@ -194,7 +194,7 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       let max = undefined; // Auto
       
       if (s.unit === 'G') {
-          min = -2.5; max = 2.5; 
+          min = -5; max = 5; 
       } else if (s.unit === 'rad/s') {
           min = -10.0; max = 10.0;
       }
