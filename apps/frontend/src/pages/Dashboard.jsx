@@ -413,7 +413,7 @@ useEffect(() => {
         }
     }, [parsedData, currentSession, setTelemetryData, setSessionInfo]);
 
-// --- REPLACE THIS BLOCK ---
+
 const gatesArray = useMemo(() => {
         const laps = allSeries.Gates_times?.lap_data;
         const timeRef = allSeries.ECU_time || allSeries.GPS_Speed;
@@ -463,60 +463,106 @@ const gatesArray = useMemo(() => {
 
     }, [allSeries]);
 
-    // ---------- FILTERING ----------
-// 2. Filter Data based on Lap OR Stint
-    const filtered = useMemo(() => {
-        let minTime = -Infinity;
-        let maxTime = Infinity;
-        let isFiltering = false;
-
-        // PRIORITIZE LAP SELECTION
-        if (selectedLap !== null && gatesArray[selectedLap]) {
-            const lap = gatesArray[selectedLap];
-            minTime = lap.startTime;
-            maxTime = lap.endTime;
-            isFiltering = true;
-        } 
-        // FALLBACK TO STINT SELECTION
-        else if (selectedTs) {
-            // Ensure we compare seconds to seconds
-            // If selectedTs strings are ISO dates, convert to seconds
-            minTime = Number(selectedTs.startTime); 
-            maxTime = Number(selectedTs.endTime);
-            isFiltering = true;
-        }
-
-        // If no filter is active, return all data immediately (performance opt)
-        if (!isFiltering) return allSeries;
-
-        const newFiltered = {};
-        
-        // Loop through all data series (RPM, Speed, etc.)
-        Object.keys(allSeries).forEach(key => {
-            // Always keep the Gates/Laps data intact so we don't break the lap selector
-            if (key === "Gates_times") {
-                newFiltered[key] = allSeries[key];
-                return;
-            }
-
-            const seriesData = allSeries[key];
-
-            // Only filter arrays (the actual sensor data)
-            if (Array.isArray(seriesData)) {
-                 // Keep points strictly within the time window
-                 newFiltered[key] = seriesData.filter(pt => {
-                     const t = pt[0]; // Timestamp is index 0
-                     return t >= minTime && t <= maxTime;
-                 });
-            } else {
-                 // Pass through non-array objects (meta data)
-                 newFiltered[key] = seriesData;
+const availableTurns = useMemo(() => {
+    const laps = allSeries.Gates_times?.lap_data;
+    if (!laps || laps.length === 0) return [];
+    const turns = new Set();
+    laps.forEach(lap => {
+        Object.keys(lap).forEach(key => {
+            if (key.startsWith("T")) {
+                const baseName = key.replace(/ IN$/, "").replace(/ OUT$/, "");
+                turns.add(baseName);
             }
         });
+    });
+    
+    return Array.from(turns).sort((a, b) => {
+        const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+        const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+        return numA - numB;
+    });
+}, [allSeries]);
 
-        return newFiltered;
-    }, [allSeries, selectedLap, selectedTs, gatesArray]);
+    // ---------- FILTERING ----------
+// 2. Filter Data based on Lap OR Stint
+// 2. Filter Data based on Lap, Turn, or Stint
+const filtered = useMemo(() => {
+    let timeWindows = [];
+    let isFiltering = false;
 
+    const lapsData = allSeries.Gates_times?.lap_data || [];
+
+    // CASE 1: A Turn is selected (Works for All Laps OR a Specific Lap)
+    if (selectedTurn) {
+        isFiltering = true;
+        
+        // If a lap is selected, only check that lap. Otherwise, check ALL laps.
+        const lapsToCheck = selectedLap !== null 
+            ? [lapsData[selectedLap]].filter(Boolean) 
+            : lapsData;
+
+        lapsToCheck.forEach(lap => {
+            if (!lap) return;
+            const timeIn = lap[`${selectedTurn} IN`];
+            const timeOut = lap[`${selectedTurn} OUT`];
+            
+            if (timeIn && timeOut) {
+                timeWindows.push({ min: Math.min(timeIn, timeOut), max: Math.max(timeIn, timeOut) });
+            } else if (timeIn) {
+                timeWindows.push({ min: timeIn, max: timeIn + 3 });
+            } else if (timeOut) {
+                timeWindows.push({ min: timeOut - 3, max: timeOut });
+            }
+        });
+    } 
+    // CASE 2: Only a Lap is selected (No Turn)
+    else if (selectedLap !== null && gatesArray[selectedLap]) {
+        isFiltering = true;
+        timeWindows.push({
+            min: gatesArray[selectedLap].startTime,
+            max: gatesArray[selectedLap].endTime
+        });
+    } 
+    // CASE 3: Only the Stint/Timestamp is selected
+    else if (selectedTs) {
+        isFiltering = true;
+        timeWindows.push({
+            min: Number(selectedTs.startTime),
+            max: Number(selectedTs.endTime)
+        });
+    }
+
+    // If no filters are active, return everything immediately
+    if (!isFiltering) return allSeries;
+
+    const newFiltered = {};
+    
+    Object.keys(allSeries).forEach(key => {
+        if (key === "Gates_times") {
+            newFiltered[key] = allSeries[key];
+            return;
+        }
+
+        const seriesData = allSeries[key];
+
+        if (Array.isArray(seriesData)) {
+             // If a filter is active but we found 0 valid time windows (e.g., turn wasn't crossed)
+             if (timeWindows.length === 0) {
+                 newFiltered[key] = [];
+             } else {
+                 newFiltered[key] = seriesData.filter(pt => {
+                     const t = pt[0]; 
+                     // Keep the point if it falls inside ANY of our active time windows
+                     return timeWindows.some(w => t >= w.min && t <= w.max);
+                 });
+             }
+        } else {
+             newFiltered[key] = seriesData;
+        }
+    });
+
+    return newFiltered;
+}, [allSeries, selectedLap, selectedTs, gatesArray, selectedTurn]);
 
 useEffect(() => {
 
@@ -687,12 +733,12 @@ const speedVsDistance = useMemo(() => {
                 <h3 className="font-medium text-gray-700 mb-2">Choose Turn</h3>
                 <select
                     className="w-full border-gray-300 rounded-md"
-                    value={selectedLap ?? ""}
-                    onChange={(e) => setSelectedLap(e.target.value === "" ? null : Number(e.target.value))}
+                    value={selectedTurn ?? ""}
+                    onChange={(e) => setSelectedTurn(e.target.value === "" ? null : e.target.value)}
                 >
-                    <option value="">All laps</option>
-                    {gatesArray.map((g, i) => (
-                        <option key={i} value={i}>{g.label}</option>
+                    <option value="">All turns</option>
+                    {availableTurns.map((t, i) => (
+                        <option key={i} value={t}>{t}</option>
                     ))}
                 </select>
             </div>
