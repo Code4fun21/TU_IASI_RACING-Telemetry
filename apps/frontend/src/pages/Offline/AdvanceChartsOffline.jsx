@@ -3,21 +3,17 @@ import * as echarts from "echarts";
 import { useTelemetry } from "../../store/OfflineDataStoreadge"; 
 import { ButterworthProcessor } from "../Dashboard";
 
-
 import TimestampSelect from "../MQTT/Components/TimestampSelect";
 import VitalChart from "../MQTT/MoreCharts/Charts/VitalChart";
 import GGChart from "../MQTT/MoreCharts/Charts/GGChart";
 import AutoPairChart from "../MQTT/MoreCharts/Charts/AutoPairChart";
 
 // --- HELPER 1: FIND BIAS & ANGLE (Updated to include Y-Axis) ---
-// --- HELPER: Standard Deviation Calculation ---
 const getStandardDeviation = (array, mean) => {
     const n = array.length;
     if (n === 0) return 0;
     return Math.sqrt(array.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / n);
 };
-
-
 
 // --- HELPER 1: ADVANCED CALIBRATION ROUTINE ---
 const calculateSessionCalibration = (telemetryData) => {
@@ -98,6 +94,7 @@ export default function AdvanceChartsOffline() {
     
     const [selectedTs, setSelectedTs] = useState(null);
     const [selectedLap, setSelectedLap] = useState(null);
+    const [selectedTurn, setSelectedTurn] = useState(null); // <-- NEW: Turn State
 
     // Safety check
     if (!telemetryData) {
@@ -155,43 +152,102 @@ export default function AdvanceChartsOffline() {
         return segments.map((seg, i) => ({ ...seg, index: i }));
     }, [telemetryData]);
 
-    // --- 2. Filter Data based on Selection ---
+    // --- 1.5 Extract Available Turns ---
+    const availableTurns = useMemo(() => {
+        const laps = telemetryData.Gates_times?.lap_data;
+        if (!laps || laps.length === 0) return [];
+        const turns = new Set();
+        laps.forEach(lap => {
+            Object.keys(lap).forEach(key => {
+                if (key.startsWith("T")) {
+                    const baseName = key.replace(/ IN$/, "").replace(/ OUT$/, "");
+                    turns.add(baseName);
+                }
+            });
+        });
+        
+        return Array.from(turns).sort((a, b) => {
+            const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+            const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+            return numA - numB;
+        });
+    }, [telemetryData]);
+
+    // --- 2. Filter Data based on Selection (Updated to include Turns) ---
     const filtered = useMemo(() => {
-        let minTime = -Infinity;
-        let maxTime = Infinity;
+        let timeWindows = [];
         let isFiltering = false;
 
-        if (selectedLap !== null && gatesArray[selectedLap]) {
-            const lap = gatesArray[selectedLap];
-            minTime = lap.startTime;
-            maxTime = lap.endTime;
+        const lapsData = telemetryData.Gates_times?.lap_data || [];
+
+        // CASE 1: A Turn is selected (Works for All Laps OR a Specific Lap)
+        if (selectedTurn) {
             isFiltering = true;
-        } else if (selectedTs) {
-            minTime = Number(selectedTs.startTime); 
-            maxTime = Number(selectedTs.endTime);
+            
+            const lapsToCheck = selectedLap !== null 
+                ? [lapsData[selectedLap]].filter(Boolean) 
+                : lapsData;
+
+            lapsToCheck.forEach(lap => {
+                if (!lap) return;
+                const timeIn = lap[`${selectedTurn} IN`];
+                const timeOut = lap[`${selectedTurn} OUT`];
+                
+                if (timeIn && timeOut) {
+                    timeWindows.push({ min: Math.min(timeIn, timeOut), max: Math.max(timeIn, timeOut) });
+                } else if (timeIn) {
+                    timeWindows.push({ min: timeIn, max: timeIn + 3 });
+                } else if (timeOut) {
+                    timeWindows.push({ min: timeOut - 3, max: timeOut });
+                }
+            });
+        } 
+        // CASE 2: Only a Lap is selected (No Turn)
+        else if (selectedLap !== null && gatesArray[selectedLap]) {
             isFiltering = true;
+            timeWindows.push({
+                min: gatesArray[selectedLap].startTime,
+                max: gatesArray[selectedLap].endTime
+            });
+        } 
+        // CASE 3: Only the Stint/Timestamp is selected
+        else if (selectedTs) {
+            isFiltering = true;
+            timeWindows.push({
+                min: Number(selectedTs.startTime),
+                max: Number(selectedTs.endTime)
+            });
         }
 
+        // If no filters are active, return everything immediately
         if (!isFiltering) return telemetryData;
 
         const newFiltered = {};
+        
         Object.keys(telemetryData).forEach(key => {
             if (key === "Gates_times") {
                 newFiltered[key] = telemetryData[key];
                 return;
             }
+
             const seriesData = telemetryData[key];
+
             if (Array.isArray(seriesData)) {
-                 newFiltered[key] = seriesData.filter(pt => {
-                     const t = pt[0]; 
-                     return t >= minTime && t <= maxTime;
-                 });
+                 if (timeWindows.length === 0) {
+                     newFiltered[key] = [];
+                 } else {
+                     newFiltered[key] = seriesData.filter(pt => {
+                         const t = pt[0]; 
+                         return timeWindows.some(w => t >= w.min && t <= w.max);
+                     });
+                 }
             } else {
                  newFiltered[key] = seriesData;
             }
         });
+
         return newFiltered;
-    }, [telemetryData, selectedLap, selectedTs, gatesArray]);
+    }, [telemetryData, selectedLap, selectedTs, gatesArray, selectedTurn]);
 
     // --- 3. AUTOMATIC CALIBRATION (Runs once per file) ---
     const calibration = useMemo(() => {
@@ -200,51 +256,65 @@ export default function AdvanceChartsOffline() {
 
 
     // --- HELPER 3: UNIFORM RESAMPLING (LINEAR INTERPOLATION) ---
-// This forces jittery CAN bus data into a mathematically perfect, uniform timeline
-const resampleSeries = (series, targetFs, startTime, endTime) => {
-    if (!series || series.length === 0) return [];
-    
-    const intervalMs = 1000 / targetFs;
-    const resampledValues = [];
-    const resampledTimes = [];
-    let currentIndex = 0;
+    const resampleSeries = (series, targetFs, startTime, endTime) => {
+        if (!series || series.length === 0) return [];
+        
+        const intervalMs = 1000 / targetFs;
+        const resampledValues = [];
+        const resampledTimes = [];
+        let currentIndex = 0;
 
-    for (let t = startTime; t <= endTime; t += intervalMs) {
-        // Advance the index until we frame the target time 't'
-        while (currentIndex < series.length - 1 && series[currentIndex + 1][0] < t) {
-            currentIndex++;
+        for (let t = startTime; t <= endTime; t += intervalMs) {
+            while (currentIndex < series.length - 1 && series[currentIndex + 1][0] < t) {
+                currentIndex++;
+            }
+
+            const p0 = series[currentIndex];
+            const p1 = series[currentIndex + 1];
+
+            resampledTimes.push(t);
+
+            if (!p1 || p0[0] === t) {
+                resampledValues.push(p0[1]); 
+            } else {
+                const ratio = (t - p0[0]) / (p1[0] - p0[0]);
+                const val = p0[1] + ratio * (p1[1] - p0[1]);
+                resampledValues.push(val);
+            }
+        }
+        return { times: resampledTimes, values: resampledValues };
+    };
+
+    // --- 4. GENERATE ALL CALIBRATED DATA ---
+    const centeredMovingAverage = (data, windowSize) => {
+        const halfWindow = Math.floor(windowSize / 2);
+        const len = data.length;
+        const result = new Array(len);
+        const cumSum = new Float64Array(len + 1);
+        
+        cumSum[0] = 0;
+        for (let i = 0; i < len; i++) {
+            cumSum[i + 1] = cumSum[i] + data[i];
         }
 
-        const p0 = series[currentIndex];
-        const p1 = series[currentIndex + 1];
-
-        resampledTimes.push(t);
-
-        if (!p1 || p0[0] === t) {
-            resampledValues.push(p0[1]); 
-        } else {
-            // Perfect Linear Interpolation
-            const ratio = (t - p0[0]) / (p1[0] - p0[0]);
-            const val = p0[1] + ratio * (p1[1] - p0[1]);
-            resampledValues.push(val);
+        for (let i = 0; i < len; i++) {
+            const start = Math.max(0, i - halfWindow);
+            const end = Math.min(len - 1, i + halfWindow);
+            const count = end - start + 1;
+            const sum = cumSum[end + 1] - cumSum[start];
+            result[i] = sum / count;
         }
-    }
-    return { times: resampledTimes, values: resampledValues };
-};
+        return result;
+    };
 
-
-
-// --- 4. GENERATE ALL CALIBRATED DATA ---
     const calibratedData = useMemo(() => {
         const accX = filtered.Acceleration_on_X_axis_RAW; 
         const accY = filtered.Acceleration_on_Y_axis_RAW; 
         const accZ = filtered.Acceleration_on_Z_axis_RAW; 
         const gpsSeries = filtered.GPS_Speed || [];
 
-        // Safety check
         if (!accX || !accY || !accZ || calibration.status !== "Success") return null;
 
-        // Because X, Y, Z come from the same CAN frame (0118), they are naturally aligned!
         const len = Math.min(accX.length, accY.length, accZ.length);
         
         const pitch = Math.asin(Math.max(-1, Math.min(1, calibration.x_bias))); 
@@ -252,11 +322,10 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
         const cosP = Math.cos(pitch); const sinP = Math.sin(pitch);
         const cosR = Math.cos(roll);  const sinR = Math.sin(roll);
 
-        const rawLongVals = [];
-        const rawLatVals = [];
-        const seriesVert = [];
+        const rawLongPairs = [];
+        const rawLatPairs = [];
+        const rawVertPairs = [];
         const times = [];
-        const speeds = [];
 
         const getInterpolatedSpeed = (targetTs) => {
             if (gpsSeries.length === 0) return 0;
@@ -265,14 +334,12 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
             const p1 = gpsSeries[nextIdx - 1];
             const p2 = gpsSeries[nextIdx];
             
-            // Prevent divide by zero if GPS timestamps are identical
             if (p2[0] === p1[0]) return p1[1]; 
             
             const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
             return p1[1] + tRatio * (p2[1] - p1[1]);
         };
 
-        // STEP 1: Process natively aligned data
         for (let i = 0; i < len; i++) {
             const time = accX[i][0];
             let x = accX[i][1]; let y = accY[i][1]; let z = accZ[i][1]; 
@@ -283,35 +350,51 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
             let z_final   = y * sinR + z_temp * cosR;
 
             times.push(time);
-            speeds.push(getInterpolatedSpeed(time)); 
-            rawLongVals.push(x_leveled * -1);
-            rawLatVals.push(y_leveled * -1);
-            seriesVert.push([time, z_final]); 
+            
+            rawLongPairs.push([time, x_leveled * -1]);
+            rawLatPairs.push([time, y_leveled * -1]);
+            rawVertPairs.push([time, z_final]); 
         }
 
-        // STEP 2: Calculate generic sample rate
-        let fs = 20; 
+        let fs = 10; 
         if (times.length > 1) {
             let tsDiff = times[times.length - 1] - times[0];
             let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
             fs = times.length / durationSeconds;
-            if (fs < 5 || fs > 500) fs = 20; 
+            if (fs < 5 || fs > 500) fs = 10; 
         }
 
-        // STEP 3: Butterworth Filter (1.5 Hz cuts the vibration but keeps the cornering peaks)
-        const finalLong = bw.filtFilt(rawLongVals, fs, 1.5);
-        const finalLat = bw.filtFilt(rawLatVals, fs, 1.5);
+        const targetFs = Math.round(fs);
 
-        // STEP 4: Build arrays with 30 km/h mask to keep the center clear
+        const rawLongValues = rawLongPairs.map(p => p[1]);
+        const rawLatValues = rawLatPairs.map(p => p[1]);
+        const rawVertValues = rawVertPairs.map(p => p[1]);
+
+        const windowSize = targetFs * 60;
+
+        const dynamicBiasLong = centeredMovingAverage(rawLongValues, windowSize);
+        const dynamicBiasLat = centeredMovingAverage(rawLatValues, windowSize);
+
+        const centeredLong = rawLongValues.map((val, i) => val - dynamicBiasLong[i]);
+        const centeredLat = rawLatValues.map((val, i) => val - dynamicBiasLat[i]);
+
+        const finalLong = bw.filtFilt([...centeredLong], targetFs, 1.7);
+        const finalLat = bw.filtFilt([...centeredLat], targetFs, 1.7);
+
         const seriesLong = [];
         const seriesLat = [];
+        const seriesVert = [];
         const ggPoints = [];
 
         for (let i = 0; i < times.length; i++) {
-            seriesLong.push([times[i], finalLong[i]]);
-            seriesLat.push([times[i], finalLat[i]]);
+            const t = times[i];
+
+            seriesLong.push([t, finalLong[i]]);
+            seriesLat.push([t, finalLat[i]]);
+            seriesVert.push([t, rawVertValues[i]]);
             
-            if (speeds[i] >= 30) {
+            const speedAtT = getInterpolatedSpeed(t);
+            if (speedAtT >= 30) {
                 ggPoints.push([finalLat[i], finalLong[i]]);
             }
         }
@@ -324,12 +407,10 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
         };
     }, [filtered.Acceleration_on_X_axis_RAW, filtered.Acceleration_on_Y_axis_RAW, filtered.Acceleration_on_Z_axis_RAW, filtered.GPS_Speed, calibration, bw]);
 
-
-
     // --- GENERATE RAW G-G DATA (No Calibration) ---
     const rawGGData = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis_RAW; // Longitudinal
-        const accZ = filtered.Acceleration_on_Z_axis_RAW; // Lateral
+        const accX = filtered.Acceleration_on_X_axis_RAW; 
+        const accZ = filtered.Acceleration_on_Z_axis_RAW; 
 
         if (!accX || !accZ) return [];
 
@@ -337,34 +418,10 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
         const points = [];
 
         for (let i = 0; i < len; i++) {
-            // Standard G-G Mapping: 
-            // Chart X-Axis = Lateral G (Sensor Z)
-            // Chart Y-Axis = Longitudinal G (Sensor X)
-            // We access index [1] because data is [timestamp, value]
             points.push([accZ[i][1], accX[i][1]]);
         }
         return points;
     }, [filtered]);
-    // --- GENERATE RAW G-G DATA (No Calibration) ---
-    const rawGGData2 = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis_RAW; // Longitudinal
-        const accZ = filtered.Acceleration_on_Y_axis_RAW; // Lateral
-
-        if (!accX || !accZ) return [];
-
-        const len = Math.min(accX.length, accZ.length);
-        const points = [];
-
-        for (let i = 0; i < len; i++) {
-            // Standard G-G Mapping: 
-            // Chart X-Axis = Lateral G (Sensor Z)
-            // Chart Y-Axis = Longitudinal G (Sensor X)
-            // We access index [1] because data is [timestamp, value]
-            points.push([accZ[i][1], accX[i][1]]);
-        }
-        return points;
-    }, [filtered]);
-
 
     // Vital Chart Data
     const vitalChartsData = useMemo(() => {
@@ -415,6 +472,21 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
                     ))}
                 </select>
             </div>
+
+            {/* Turn selector */}
+            <div className="rounded-lg bg-white p-4 shadow">
+                <h3 className="font-medium text-gray-700 mb-2">Choose Turn</h3>
+                <select
+                    className="w-full border-gray-300 rounded-md"
+                    value={selectedTurn ?? ""}
+                    onChange={(e) => setSelectedTurn(e.target.value === "" ? null : e.target.value)}
+                >
+                    <option value="">All turns</option>
+                    {availableTurns.map((t, i) => (
+                        <option key={i} value={t}>{t}</option>
+                    ))}
+                </select>
+            </div>
             
             {/* Vital Functions Chart */}
             {vitalChartsData && (
@@ -433,15 +505,7 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
                 <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Auto-Leveled)</h3>
                 <GGChart data={calibratedData ? calibratedData.ggPoints : []} height={1000} />
             </div>
-            <div className="rounded-lg bg-white p-4 shadow">
-                <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Raw Data)</h3>
-                <GGChart data={rawGGData} height={1000} />
-            </div>
-            {/* <div className="rounded-lg bg-white p-4 shadow">
-                <h3 className="font-medium text-gray-700 mb-2">G-G Diagram (Raw Data)</h3>
-                <GGChart data={rawGGData2} height={400} />
-            </div> */}
-            
+           
             {/* Acceleration Traces (Uses Calibrated Data) */}
             <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">118 (Acceleration - Calibrated)</h3>
@@ -471,60 +535,7 @@ const resampleSeries = (series, targetFs, startTime, endTime) => {
                     />
                 )}
             </div>
-            <div className="rounded-lg bg-white p-4 shadow">
-                <h3 className="font-medium text-gray-700 mb-2">118 (Acceleration)</h3>
-                <AutoPairChart
-                    align="base-fastest"
-                    alignMethod="linear"
-                    toleranceMs={100} // Low tolerance for high-freq IMU data
-                    height={300}
-                    series={[
-                        {
-                            name: "Accel X", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_X_axis_RAW),
-                            data: filtered.Acceleration_on_X_axis_RAW?.map(pt => pt[1]) || []
-                        },
-                        {
-                            name: "Accel Y", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Y_axis_RAW),
-                            data: filtered.Acceleration_on_Y_axis_RAW?.map(pt => pt[1]) || []
-                        },
-                        {
-                            name: "Accel Z", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_Z_axis_RAW),
-                            data: filtered.Acceleration_on_Z_axis_RAW?.map(pt => pt[1]) || []
-                        }
-                    ]}
-                />
-            </div>
-
-            {/* Gyro Traces (Still uses Filtered/Raw Data) */}
-            <div className="rounded-lg bg-white p-4 shadow">
-                <h3 className="font-medium text-gray-700 mb-2">119 (Gyroscope)</h3>
-                <AutoPairChart
-                    align="base-fastest"
-                    alignMethod="linear"
-                    toleranceMs={100}
-                    height={300}
-                    series={[
-                        {
-                            name: "Gyro X", unit: "rad/s",
-                            time: timeStamps(filtered.Gyroscope_on_X_axis),
-                            data: filtered.Gyroscope_on_X_axis?.map(pt => pt[1]) || []
-                        },
-                        {
-                            name: "Gyro Y", unit: "rad/s",
-                            time: timeStamps(filtered.Gyroscope_on_Y_axis),
-                            data: filtered.Gyroscope_on_Y_axis?.map(pt => pt[1]) || []
-                        },
-                        {
-                            name: "Gyro Z", unit: "rad/s",
-                            time: timeStamps(filtered.Gyroscope_on_Z_axis),
-                            data: filtered.Gyroscope_on_Z_axis?.map(pt => pt[1]) || []
-                        }
-                    ]}
-                />
-            </div>
+            
         </div>       
     );
 }

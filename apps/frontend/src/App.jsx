@@ -12,6 +12,7 @@ import DataInput from "./pages/DataInput/DataInput";
 import AdvanceChartsOffline from "./pages/Offline/AdvanceChartsOffline";
 import MqttAuth from "./pages/MQTT/MqttAuth";
 import UploadPage from "./fileManager/UploadPage"; 
+import DashboardDebug from "./pages/Dashboard_debug";
 
 // Context providers
 // DELETED: import { SocketProvider } from "./context/SocketContext"; 
@@ -37,6 +38,7 @@ function App() {
                             <Route path="live-dashboard" element={<LiveDashboard />} />
                             <Route path="data-input" element={<DataInput />} />
                             <Route path="offline-data" element={<Dashboard />} />
+                            <Route path="offline-data-debug" element={<DashboardDebug />} />
                             <Route path="offline-advance-charts" element={<AdvanceChartsOffline />} />
                         </Route>
                         

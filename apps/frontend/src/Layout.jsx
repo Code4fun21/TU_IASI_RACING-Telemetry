@@ -7,6 +7,7 @@ import {
     XMarkIcon,
     AdjustmentsHorizontalIcon,
     ListBulletIcon,
+    BugAntIcon,
 } from "@heroicons/react/24/outline";
 import logo from "./assets/logo-white.png";
 
@@ -14,6 +15,7 @@ const navigationOnline = [
     { name: "Drivers and Monoposts", href: "/data-input", icon: AdjustmentsHorizontalIcon, current: true },
     { name: "Dashboard", href: "/from-file", icon: HomeIcon, current: false },
     { name: "Advance charts", href: "/offline-advance-charts", icon: ListBulletIcon, current: false },
+    { name: "Debug", href: "/offline-data-debug", icon: BugAntIcon, current: false },
 ];
 
 function classNames(...classes) {

@@ -3,7 +3,6 @@ import { useMemo } from 'react';
 
 const GGChart = ({ data, height = 600 }) => {
 
-
 // --- ALGORITHM: CALCULATE THE 95th PERCENTILE FRICTION ENVELOPE ---
     const envelopeData = useMemo(() => {
         if (!data || data.length === 0) return [];
@@ -49,14 +48,44 @@ const GGChart = ({ data, height = 600 }) => {
         return envelope;
     }, [data]);
 
+    const heatmapData = useMemo(() => {
+        if (!data || data.length === 0) return [];
+        const map = new Map();
+        const step = 0.05; 
+        data.forEach(pt => {
+            const x = Math.round(pt[0] / step) * step;
+            const y = Math.round(pt[1] / step) * step;
+            const key = `${x.toFixed(2)},${y.toFixed(2)}`;
+            map.set(key, (map.get(key) || 0) + 1);
+        });
+        const result = [];
+        map.forEach((value, key) => {
+            const [x, y] = key.split(',').map(Number);
+            result.push([x, y, value]);
+        });
+        return result;
+    }, [data]);
+
     const options = {
         title: { text: 'G-G Diagram', left: 'center' },
-        grid: { left: '10%', right: '10%', top: '15%', bottom: '15%' },
+        grid: { left: '10%', right: '15%', top: '15%', bottom: '15%' },
         tooltip: {
             formatter: (params) => {
                 if (params.seriesName === 'Envelope') return 'Grip Limit';
-                return `Lat: ${params.value[0].toFixed(2)} G<br/>Long: ${params.value[1].toFixed(2)} G`;
+                return `Lat: ${params.value[0].toFixed(2)} G<br/>Long: ${params.value[1].toFixed(2)} G<br/>Density: ${params.value[2]}`;
             }
+        },
+        visualMap: {
+            min: 1,
+            max: 50,
+            calculable: true,
+            orient: 'vertical',
+            right: '0%',
+            top: 'center',
+            inRange: {
+                color: ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
+            },
+            seriesIndex: 0
         },
         xAxis: {
             type: 'value',
@@ -80,13 +109,12 @@ const GGChart = ({ data, height = 600 }) => {
             // Series 1: The Cloud
             {
                 name: 'Telemetry',
-                symbolSize: 4,
-                data: data,
+                symbolSize: 8,
+                data: heatmapData,
                 type: 'scatter',
                 itemStyle: { 
-                    color: '#8884d8', 
                     // PRO TIP: Lower opacity so the dense areas glow and noise fades!
-                    opacity: 0.25 
+                    opacity: 0.85 
                 },
                 zlevel: 1
             },
