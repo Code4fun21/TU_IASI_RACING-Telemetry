@@ -13,7 +13,7 @@ export const MqttService = {
   
   setTrack: (trackData:Track) => {
     console.log("Setting Track Gates for Decoder...",trackData);
-    decoder.setBaseCoordinates(trackData);
+    // decoder.setBaseCoordinates(trackData);
   },
 
   connect: (config: { broker: string; port: number; topic: string }) => {
