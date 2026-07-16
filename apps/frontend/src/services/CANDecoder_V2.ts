@@ -236,7 +236,7 @@ class GPS_Intersection {
 // 3. CONFIGURATION & DATABASE V2
 // ==========================================
 
-const MAIN_COORDS = [46, 23]; 
+// const MAIN_COORDS = [46, 23]; 
 
 interface SignalConfig {
     name: string;
@@ -329,12 +329,12 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 
 export class CANDecoderV2 {
     data: Record<string, any> = {
-        "GEAR": "N", 
-        "SPD": 0.0, 
-        "LAT": 0.0, 
-        "LON": 0.0,
-        "AX": 0.0, "AY": 0.0, "AZ": 0.0,
-        "GX": 0.0, "GY": 0.0, "GZ": 0.0,
+        "gear": "N", 
+        "GPS_Speed": 0.0, 
+        "GPS_Latitude": 0.0, 
+        "GPS_Longitude": 0.0,
+        "accelerationX": 0.0, "accelerationY": 0.0, "accelerationZ": 0.0,
+        "gyroX": 0.0, "gyroY": 0.0, "gyroZ": 0.0,
         "LAP_MS": 0,
         "damperLF": 0, "damperRF": 0, "steering": 0,
         "damperLR": 0, "damperRR": 0, "brakePressure": 0,
@@ -375,77 +375,74 @@ export class CANDecoderV2 {
                 updated = true;
             }
             else if (canId === 0x501 && byteLen >= 6) {
-                this.data["AX"] = buffer.getInt16(0, false) / 100.0;
-                this.data["AY"] = buffer.getInt16(2, false) / 100.0;
-                this.data["AZ"] = buffer.getInt16(4, false) / 100.0;
+                this.data["accelerationX"] = buffer.getInt16(0, false) / 100.0;
+                this.data["accelerationY"] = buffer.getInt16(2, false) / 100.0;
+                this.data["accelerationZ"] = buffer.getInt16(4, false) / 100.0;
                 updated = true;
             }
             else if (canId === 0x502 && byteLen >= 6) {
-                this.data["GX"] = buffer.getInt16(0, false) / 100.0;
-                this.data["GY"] = buffer.getInt16(2, false) / 100.0;
-                this.data["GZ"] = buffer.getInt16(4, false) / 100.0;
+                this.data["gyroX"] = buffer.getInt16(0, false) / 100.0;
+                this.data["gyroY"] = buffer.getInt16(2, false) / 100.0;
+                this.data["gyroZ"] = buffer.getInt16(4, false) / 100.0;
                 updated = true;
             }
             
-            // --- MEGASQUIRT DATA (As per spreadsheet specs) ---
+            // --- MEGASQUIRT DATA ---
             else if (canId === 0x5F0 && byteLen >= 8) {
-                this.data["rpm"] = buffer.getUint16(6, false); // Offset 6, Mult 1, Div 1
+                this.data["rpm"] = buffer.getUint16(6, false); 
                 updated = true;
             }
             else if (canId === 0x5F2 && byteLen >= 8) {
-                this.data["manifoldAirPressure"] = buffer.getUint16(2, false) / 10.0; // Offset 2, Mult 1, Div 10
+                this.data["manifoldAirPressure"] = buffer.getUint16(2, false) / 10.0; 
                 
-                // Temperatures come in Fahrenheit divided by 10. We convert to Celsius.
-                const matF = buffer.getUint16(4, false) / 10.0; // Offset 4
+                const matF = buffer.getUint16(4, false) / 10.0; 
                 this.data["manifoldAirTemp"] = Number(((matF - 32) * 5 / 9).toFixed(1)); 
                 
-                const cltF = buffer.getUint16(6, false) / 10.0; // Offset 6
+                const cltF = buffer.getUint16(6, false) / 10.0; 
                 this.data["coolantTemp"] = Number(((cltF - 32) * 5 / 9).toFixed(1));
                 updated = true;
             }
             else if (canId === 0x5F3 && byteLen >= 4) {
-                this.data["throttlePosition"] = buffer.getUint16(0, false) / 10.0; // Offset 0, Mult 1, Div 10
-                this.data["batteryVoltage"] = buffer.getUint16(2, false) / 10.0; // Offset 2, Mult 1, Div 10
+                this.data["throttlePosition"] = buffer.getUint16(0, false) / 10.0; 
+                this.data["batteryVoltage"] = buffer.getUint16(2, false) / 10.0; 
                 updated = true;
             }
             else if (canId === 0x5F4 && byteLen >= 8) {
-                this.data["airDensityCorrection"] = buffer.getUint16(6, false) / 10.0; // Offset 6, Mult 1, Div 10
+                this.data["airDensityCorrection"] = buffer.getUint16(6, false) / 10.0; 
                 updated = true;
             }
             else if (canId === 0x5F5 && byteLen >= 6) {
-                this.data["warmupCorrection"] = buffer.getUint16(0, false) / 10.0; // Offset 0, Mult 1, Div 10
-                this.data["tpsBasedAcceleration"] = buffer.getUint16(2, false) / 10.0; // Offset 2, Mult 1, Div 10
-                this.data["tpsBasedFuelCut"] = buffer.getUint16(4, false) / 10.0; // Offset 4, Mult 1, Div 10
+                this.data["warmupCorrection"] = buffer.getUint16(0, false) / 10.0; 
+                this.data["tpsBasedAcceleration"] = buffer.getUint16(2, false) / 10.0; 
+                this.data["tpsBasedFuelCut"] = buffer.getUint16(4, false) / 10.0; 
                 updated = true;
             }
             else if (canId === 0x5F6 && byteLen >= 6) {
-                this.data["totalfuelCorrection"] = buffer.getUint16(0, false) / 10.0; // Offset 0, Mult 1, Div 10
-                this.data["veValueTableBank1"] = buffer.getUint16(2, false) / 10.0; // Offset 2, Mult 1, Div 10
-                this.data["veValueTableBank2"] = buffer.getUint16(4, false) / 10.0; // Offset 4, Mult 1, Div 10
+                this.data["totalfuelCorrection"] = buffer.getUint16(0, false) / 10.0; 
+                this.data["veValueTableBank1"] = buffer.getUint16(2, false) / 10.0; 
+                this.data["veValueTableBank2"] = buffer.getUint16(4, false) / 10.0; 
                 updated = true;
             }
             else if (canId === 0x5F7 && byteLen >= 8) {
-                this.data["coldAdvance"] = buffer.getUint16(0, false) / 10.0; // Offset 0, Mult 1, Div 10
-                this.data["rateOfchangeOfTPS"] = buffer.getUint16(2, false) / 10.0; // Offset 2, Mult 1, Div 10
-                
-                // NOTE: The spreadsheet specifies Multiplier 10, Divider 1 for RPM Rate of Change
-                this.data["rateOfChangeOfRPM"] = buffer.getUint16(6, false) * 10.0; // Offset 6
+                this.data["coldAdvance"] = buffer.getUint16(0, false) / 10.0; 
+                this.data["rateOfchangeOfTPS"] = buffer.getUint16(2, false) / 10.0; 
+                this.data["rateOfChangeOfRPM"] = buffer.getUint16(6, false) * 10.0; 
                 updated = true;
             }
             else if (canId === 0x61B && byteLen >= 2) {
-                this.data["syncLossCounter"] = buffer.getUint8(0); // Offset 0, Size 1
-                this.data["syncLossReasonCode"] = buffer.getUint8(1); // Offset 1, Size 1
+                this.data["syncLossCounter"] = buffer.getUint8(0); 
+                this.data["syncLossReasonCode"] = buffer.getUint8(1); 
                 updated = true;
             }
             else if (canId === 0x624 && byteLen >= 6) {
-                this.data["averageFuelFlow"] = buffer.getUint16(4, false); // Offset 4, Mult 1, Div 1
+                this.data["averageFuelFlow"] = buffer.getUint16(4, false); 
                 updated = true;
             }
 
             // --- REAR MODULE & GPS ---
             else if (canId === 0x700 && byteLen >= 1) {
                 const g = buffer.getUint8(0);
-                this.data["GEAR"] = g === 0 ? "N" : g.toString();
+                this.data["gear"] = g === 0 ? "N" : g.toString();
                 updated = true;
             }
             else if (canId === 0x701 && byteLen >= 6) {
@@ -455,12 +452,12 @@ export class CANDecoderV2 {
                 updated = true;
             }
             else if (canId === 0x800 && byteLen >= 8) {
-                this.data["LAT"] = buffer.getFloat32(0, true);
-                this.data["LON"] = buffer.getFloat32(4, true);
+                this.data["GPS_Latitude"] = buffer.getFloat32(0, true);
+                this.data["GPS_Longitude"] = buffer.getFloat32(4, true);
                 updated = true;
             }
             else if (canId === 0x801 && byteLen >= 4) {
-                this.data["SPD"] = buffer.getFloat32(0, true) * 1.852;
+                this.data["GPS_Speed"] = buffer.getFloat32(0, true) * 1.852;
                 updated = true;
             }
             else if (canId === 0x777 && byteLen >= 4) {
