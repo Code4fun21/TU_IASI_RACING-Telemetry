@@ -7,7 +7,7 @@ import { transformToColumnar } from "../../services/DataTransformer";
 
 // Components
 import MapChart from "../../components/MapChart"; 
-import LapTimesPanel from "../MQTT/MoreCharts/Charts/LapTimesPanel"; // <--- 1. NEW IMPORT
+import LapTimesPanel from "../MQTT/MoreCharts/Charts/LapTimesPanel"; 
 import TopActionBar from "./Components/TopActionBar"; 
 import MultiLineChart from "../../components/MultiLineChart"; 
 import RPMChart from "../../components/RPMChart";
@@ -18,13 +18,15 @@ import BrakePressureChart from "../../components/BrakePressureChart";
 const MAX_DATA_POINTS = 200; 
 const ENGINE_SIGNALS = ["rpm", "gear", "throttlePosition", "brakePressure"];
 const VITAL_SIGNALS = ["batteryVoltage", "coolantTemp", "manifoldAirPressure"];
+
+// Re-added Lat and Lon for debugging data flow
 const GPS_KEYS = ["GPS_Speed", "GPS_Latitude", "GPS_Longitude"];
 
-// --- 1. DEFINE ALL AVAILABLE SIGNALS FOR THE DROPDOWN ---
+// Define ALL AVAILABLE SIGNALS FOR THE DROPDOWN
 const ALL_SIGNALS = [
     ...ENGINE_SIGNALS,
     ...VITAL_SIGNALS,
-    ...GPS_KEYS,
+    "GPS_Speed", "GPS_Latitude", "GPS_Longitude", // Explicitly added for custom charts
     "manifoldAirTemp", "oilPressure", "fuelLevel", "steeringAngle",
     "damperFL", "damperFR", "damperRL", "damperRR",
     "accelerationX", "accelerationY", "accelerationZ",
@@ -51,9 +53,8 @@ export default function LiveDashboard() {
   const [gates, setGates] = useState([]);
   const [sessionData, setSession] = useState(null);
 
-  // --- 2. NEW STATE FOR CUSTOM CHART ---
-  const [staged, setStaged] = useState([]);       // Selected but not charted yet
-  const [committed, setCommitted] = useState([]); // Currently displayed on chart
+  const [staged, setStaged] = useState([]);       
+  const [committed, setCommitted] = useState([]); 
 
   const readBlobAsText = (blob) => {
     return new Promise((resolve, reject) => {
@@ -70,8 +71,7 @@ export default function LiveDashboard() {
     const loadTrackAssets = async () => {
       try {
         const track = await api.getTrackById(trackId);
-        console.log(track)
-        MqttService.setTrack(track)
+        MqttService.setTrack(track);
         const [gatesBlob, layoutBlob] = await Promise.all([
             api.downloadFile(track.gates),       
             api.downloadFile(track.coordinates)  
@@ -85,7 +85,6 @@ export default function LiveDashboard() {
         setGates(parsedGates);
         setTrackData({ ...track, coordinates: parsedLayout });
 
-        
       } catch (err) {
         console.error("Failed to load/parse track assets:", err);
       }
@@ -108,10 +107,7 @@ export default function LiveDashboard() {
 
   // --- CHART DATA PREPARATION ---
 
-  // 1.1 NEW: Extract Laps from Buffer for Panel
   const liveLaps = useMemo(() => {
-      // Look for the latest packet that contains "lap_data"
-      // We search from end to start to find the freshest update
       const lapPacket = decodedBuffer.slice().reverse().find(p => p.lap_data);
       if (lapPacket && Array.isArray(lapPacket.lap_data)) {
           return lapPacket.lap_data;
@@ -119,14 +115,30 @@ export default function LiveDashboard() {
       return [];
   }, [decodedBuffer]);
 
-  // Generic Helper for Engine/Vital/Custom
+  // FIX 2: Upgraded Sample & Hold Logic
   const processDataWithHold = (buffer, signalKeys, validator = null) => {
-    const recentBuffer = buffer.slice(-MAX_DATA_POINTS);
+    const sliceStartIndex = Math.max(0, buffer.length - MAX_DATA_POINTS);
+    const recentBuffer = buffer.slice(sliceStartIndex);
     const timestamps = recentBuffer.map(d => formatTime(d.timestamp));
     const result = { timestamps };
     
     const lastKnown = {}; 
     
+    // Step A: Historical Lookback. Find the true last known value BEFORE the 200-point slice begins.
+    // This prevents the chart from starting with `null` if the GPS packet is slow.
+    signalKeys.forEach(key => {
+        for (let i = sliceStartIndex - 1; i >= 0; i--) {
+            const val = buffer[i][key];
+            if (val !== undefined && val !== null) {
+                if (!validator || validator(val, key)) {
+                    lastKnown[key] = val;
+                    break; // Found it, stop searching backwards
+                }
+            }
+        }
+    });
+
+    // Step B: Build the line data
     signalKeys.forEach(key => {
         result[key] = recentBuffer.map(d => {
             const val = d[key];
@@ -145,24 +157,12 @@ export default function LiveDashboard() {
 
   const lineDataEngine = useMemo(() => processDataWithHold(decodedBuffer, ENGINE_SIGNALS), [decodedBuffer]);
   const lineDataVital = useMemo(() => processDataWithHold(decodedBuffer, VITAL_SIGNALS), [decodedBuffer]);
+  const lineDataGPS = useMemo(() => processDataWithHold(decodedBuffer, GPS_KEYS), [decodedBuffer]);
 
-  // GPS Logic (De-coupled Speed)
-  const lineDataGPS = useMemo(() => {
-    return processDataWithHold(decodedBuffer, GPS_KEYS, (val, key) => {
-        if (key === "GPS_Latitude" || key === "GPS_Longitude") {
-             return Math.abs(val) > 1.0; // Strict filter for map
-        }
-        return true; // Speed passes freely
-    });
-  }, [decodedBuffer]);
-
-  // --- 3. NEW: CUSTOM CHART DATA LOGIC ---
   const lineDataCustom = useMemo(() => {
     if (committed.length === 0) return null;
-    // Re-use the robust hold logic for whatever the user selected
     return processDataWithHold(decodedBuffer, committed);
   }, [decodedBuffer, committed]);
-
 
   // --- GAUGE DATA ---
   const latestRpm = useMemo(() => {
@@ -180,23 +180,17 @@ export default function LiveDashboard() {
     return lineDataGPS.GPS_Speed[lineDataGPS.GPS_Speed.length - 1] ?? 0;
   }, [lineDataGPS]);
 
-
   // --- UI HANDLERS FOR CUSTOM CHART ---
   const handleAddSignal = (e) => {
       const val = e.target.value;
       if (val && !staged.includes(val) && staged.length < 5) {
           setStaged([...staged, val]);
       }
-      e.target.value = ""; // Reset dropdown
+      e.target.value = ""; 
   };
 
-  const removeStaged = (sig) => {
-      setStaged(staged.filter(s => s !== sig));
-  };
-
-  const handleCreateChart = () => {
-      setCommitted([...staged]);
-  };
+  const removeStaged = (sig) => setStaged(staged.filter(s => s !== sig));
+  const handleCreateChart = () => setCommitted([...staged]);
 
   // --- STOP & SAVE ---
   const handleStopSession = async () => {
@@ -232,7 +226,7 @@ export default function LiveDashboard() {
     }
   };
 
-  // Map Data
+  // FIX 3: Robust Map Data extraction (Accounts for split Speed/Pos packets)
   const mapData = useMemo(() => {
     const validPoints = decodedBuffer.filter(p => 
         p.GPS_Longitude && Math.abs(p.GPS_Longitude) > 1.0 && 
@@ -240,10 +234,14 @@ export default function LiveDashboard() {
     );
     if (validPoints.length > 0) {
         const lastPoint = validPoints[validPoints.length - 1];
+        
+        // Find the last known speed packet, since it arrives separately from position
+        const lastSpeedMsg = decodedBuffer.slice().reverse().find(p => p.GPS_Speed !== undefined);
+
         return [{
             lon: lastPoint.GPS_Longitude,
             lat: lastPoint.GPS_Latitude,
-            speed: lastPoint.GPS_Speed,
+            speed: lastSpeedMsg ? lastSpeedMsg.GPS_Speed : 0,
             ts: lastPoint.timestamp
         }];
     }
@@ -274,11 +272,10 @@ export default function LiveDashboard() {
             </div>
         </div>
 
-        {/* --- 4. NEW: BUILD YOUR OWN CHART UI --- */}
+        {/* BUILD YOUR OWN CHART UI */}
         <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Build Your Own Chart</h3>
             
-            {/* Controls */}
             <div className="flex flex-wrap items-center gap-4 mb-4">
                 <select 
                     className="border border-gray-300 rounded px-3 py-2 text-sm"
@@ -307,7 +304,6 @@ export default function LiveDashboard() {
                 </button>
             </div>
 
-            {/* Tags (Staged Signals) */}
             <div className="flex flex-wrap gap-2 mb-4">
                 {staged.map((k) => (
                     <span key={k} className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-3 py-1 text-sm text-blue-800">
@@ -325,7 +321,6 @@ export default function LiveDashboard() {
                 )}
             </div>
 
-            {/* The Custom Chart */}
             {committed.length > 0 && lineDataCustom ? (
                 <div className="mt-6 border-t pt-4">
                     <MultiLineChart data={lineDataCustom} />
@@ -344,10 +339,9 @@ export default function LiveDashboard() {
             {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataVital} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
         </div>
         
-
         {/* GPS Chart */}
         <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">GPS Data</h3>
+            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">GPS Speed</h3>
             {decodedBuffer.length > 0 ? (
                 <MultiLineChart data={lineDataGPS} />
             ) : (
@@ -355,12 +349,8 @@ export default function LiveDashboard() {
             )}
         </div>
 
-        {/* --- 5. UPDATED LAYOUT: Live Map + Lap Times Panel --- */}
-        {/* Changed to 3 columns (2:1 ratio) and added min-h */}
+        {/* Live Map + Lap Times Panel */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">
-            
-            {/* Live Map */}
-            {/* Added min-w-0 to prevent Grid blowout */}
             <div className="bg-white p-4 rounded-lg shadow lg:col-span-2 relative flex flex-col min-w-0">
                 <h3 className="text-lg font-medium text-gray-900 text-center mb-2">Live Map</h3>
                 <div className="flex-grow relative border border-gray-100 rounded bg-gray-50 overflow-hidden">
@@ -378,7 +368,6 @@ export default function LiveDashboard() {
                 </div>
             </div>
 
-            {/* Lap Times Panel */}
             <div className="bg-white rounded-lg shadow lg:col-span-1 flex flex-col overflow-hidden min-w-0">
                 <LapTimesPanel 
                     laps={liveLaps} 
@@ -386,9 +375,7 @@ export default function LiveDashboard() {
                     className="w-full h-full border-0 shadow-none" 
                 />
             </div>
-            
         </div>
-        {/* ------------------------------------------- */}
 
         {/* Gauges */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
