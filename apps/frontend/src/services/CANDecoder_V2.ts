@@ -236,7 +236,7 @@ class GPS_Intersection {
 // 3. CONFIGURATION & DATABASE V2
 // ==========================================
 
-// const MAIN_COORDS = [46, 23]; 
+const MAIN_COORDS = [46, 23]; 
 
 interface SignalConfig {
     name: string;
@@ -266,9 +266,16 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 }
     ],
 
+    // GYRO (int16, Big Endian, formula: / 100.0)
+    "0502": [
+        { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100 },
+        { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100 },
+        { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100 }
+    ],
+
     // GEAR (uint8)
     "0700": [
-        { name: "gear",          offset: 0, size: 1 }
+        { name: "gear",          offset: 0, size: 1, method: "Method_Gear" }
     ],
 
     // REAR_ANALOG (uint16, Big Endian)
@@ -289,11 +296,16 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE", multiply: 1.852 } 
     ],
 
-    // MEGASQUIRT (Retained exactly as requested)
+    // LAP TIME (uint32)
+    "0777": [
+        { name: "LAP_MS",        offset: 0, size: 4 } 
+    ],
+
+    // MEGASQUIRT
     "05F0": [{ name: "rpm", offset: 6, size: 2 }],
     "05F2": [
         { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
-        { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10 },
+        { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10, method:"Convert_Temp" },
         { name: "coolantTemp",         offset: 6, size: 2, divide: 10, method:"Convert_Temp" }
     ],
     "05F3": [
@@ -308,8 +320,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
     "05F6": [
         { name: "totalfuelCorrection", offset: 0, size: 2, divide: 10 },
-        { name: "veValueTable/bank1",  offset: 2, size: 2, divide: 10 },
-        { name: "veValueTable/bank2",  offset: 4, size: 2, divide: 10 }
+        { name: "veValueTableBank1",   offset: 2, size: 2, divide: 10 },
+        { name: "veValueTableBank2",   offset: 4, size: 2, divide: 10 }
     ],
     "05F7": [
         { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
@@ -317,8 +329,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10, filter: true }
     ],
     "061B": [
-        { name: "sync-lossCounter",        offset: 0, size: 1 },
-        { name: "sync-lossReasonCode",     offset: 1, size: 1 }
+        { name: "syncLossCounter",     offset: 0, size: 1 },
+        { name: "syncLossReasonCode",  offset: 1, size: 1 }
     ],
     "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
@@ -328,28 +340,82 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 // ==========================================
 
 export class CANDecoderV2 {
-    data: Record<string, any> = {
-        "gear": "N", 
-        "GPS_Speed": 0.0, 
-        "GPS_Latitude": 0.0, 
-        "GPS_Longitude": 0.0,
-        "accelerationX": 0.0, "accelerationY": 0.0, "accelerationZ": 0.0,
-        "gyroX": 0.0, "gyroY": 0.0, "gyroZ": 0.0,
-        "LAP_MS": 0,
-        "damperLF": 0, "damperRF": 0, "steering": 0,
-        "damperLR": 0, "damperRR": 0, "brakePressure": 0,
-        "rpm": 0, "manifoldAirPressure": 0, "manifoldAirTemp": 0, "coolantTemp": 0,
-        "throttlePosition": 0, "batteryVoltage": 0, "airDensityCorrection": 0,
-        "warmupCorrection": 0, "tpsBasedAcceleration": 0, "tpsBasedFuelCut": 0,
-        "totalfuelCorrection": 0, "veValueTableBank1": 0, "veValueTableBank2": 0,
-        "coldAdvance": 0, "rateOfchangeOfTPS": 0, "rateOfChangeOfRPM": 0,
-        "syncLossCounter": 0, "syncLossReasonCode": 0, "averageFuelFlow": 0
-    };
+    filtersLPF: Record<string, LowPassFilter> = {};
+    filtersKalman: Record<string, KalmanFilter2D> = {};
 
-    health: Record<string, any> = {
-        "FRONT": { drops: 0, failures: 0, queue_free: 0, flags: 0, heartbeat: 0, last_seen: 0 },
-        "REAR": { drops: 0, failures: 0, queue_free: 0, flags: 0, heartbeat: 0, last_seen: 0 }
-    };
+    calibrator = new StaticCalibrator();
+    lastAccel = [0, 0, 0];
+    lastGyro = [0, 0, 0];
+    
+    mainCoords: [number, number]; 
+    prevPos: GPSPoint | null = null;
+    currPos: GPSPoint | null = null;
+
+    imuBiasSamples: number;
+    imuBuffer: Record<string, number[]>;
+    imuBias: Record<string, number>;
+    
+    gateCheckers: Record<string, GPS_Intersection> = {};
+    currentLap: Record<string, number | boolean | number> = {};
+    lapsHistory: any[] = [];
+    trackLen: number = 0;
+    gateIdx: number = 0;
+    justS0: boolean = false;
+    lapCount: number = 0;
+
+    constructor() {
+        this.mainCoords = [0, 0];
+        this.imuBiasSamples = 25; 
+        this.imuBuffer = {
+            accelerationX: [], accelerationY: [], accelerationZ: [],
+            gyroX: [], gyroY: [], gyroZ: []
+        };
+        this.imuBias = {};
+    }
+
+    async setBaseCoordinates(trackData: any) {
+        if (!trackData) {
+            console.warn("No trackData provided to setBaseCoordinates");
+            return;
+        }
+
+        if (trackData.gates && typeof trackData.gates === 'object') {
+            this.initializeGates(trackData.gates);
+        } 
+        else if (typeof trackData.gates === 'string') {
+            try {
+                const data = await api.fetchJsonFile(trackData.gates);
+                this.initializeGates(data);
+            } catch (err) {
+                console.warn("Failed to download Gates file:", err);
+            }
+        }
+    }
+
+    initializeGates(data: any) {
+        if (!Array.isArray(data) || data.length === 0) {
+            console.warn("Gates data is empty or invalid.");
+            return;
+        }
+
+        const lat = Math.floor(Number(data[0].lat1)); 
+        const lon = Math.floor(Number(data[0].lon1));
+
+        this.mainCoords = [lat, lon];
+        this.gateCheckers = {};
+
+        data.forEach((g: any) => {
+            if (g.lat1 == null || g.lon1 == null || g.lat2 == null || g.lon2 == null) return;
+
+            const gL = new GPSPoint(Number(g.lat1), Number(g.lon1), 0, 0);
+            const gR = new GPSPoint(Number(g.lat2), Number(g.lon2), 0, 0);
+            
+            const gateName = g.name || `Gate_${Math.random().toString(36).substr(2, 5)}`;
+            this.gateCheckers[gateName] = new GPS_Intersection(gL, gR);
+        });
+
+        console.log(`Decoder V2 Initialized: Base [${lat}, ${lon}], Gates: ${Object.keys(this.gateCheckers).length}`);
+    }
 
     parse(rawString: string) {
         try {
@@ -357,155 +423,293 @@ export class CANDecoderV2 {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]);
-            
-            const canIdStr = parts[1].trim().replace(/^0x/i, '');
-            const canId = parseInt(canIdStr, 16);
-            
-            const hexData = parts[2].trim();
-            const buffer = this.hexToDataView(hexData);
-            const byteLen = buffer.byteLength;
+            let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
+            if (canId.length < 4) canId = canId.padStart(4, "0");
 
-            let updated = false;
+            const payloadHex = parts[2].trim();
+            const signals = CAN_DATABASE[canId];
 
-            // --- CUSTOM SENSORS ---
-            if (canId === 0x500 && byteLen >= 6) {
-                this.data["damperLF"] = buffer.getUint16(0, false);
-                this.data["damperRF"] = buffer.getUint16(2, false);
-                this.data["steering"] = buffer.getUint16(4, false);
-                updated = true;
-            }
-            else if (canId === 0x501 && byteLen >= 6) {
-                this.data["accelerationX"] = buffer.getInt16(0, false) / 100.0;
-                this.data["accelerationY"] = buffer.getInt16(2, false) / 100.0;
-                this.data["accelerationZ"] = buffer.getInt16(4, false) / 100.0;
-                updated = true;
-            }
-            else if (canId === 0x502 && byteLen >= 6) {
-                this.data["gyroX"] = buffer.getInt16(0, false) / 100.0;
-                this.data["gyroY"] = buffer.getInt16(2, false) / 100.0;
-                this.data["gyroZ"] = buffer.getInt16(4, false) / 100.0;
-                updated = true;
-            }
-            
-            // --- MEGASQUIRT DATA ---
-            else if (canId === 0x5F0 && byteLen >= 8) {
-                this.data["rpm"] = buffer.getUint16(6, false); 
-                updated = true;
-            }
-            else if (canId === 0x5F2 && byteLen >= 8) {
-                this.data["manifoldAirPressure"] = buffer.getUint16(2, false) / 10.0; 
-                
-                const matF = buffer.getUint16(4, false) / 10.0; 
-                this.data["manifoldAirTemp"] = Number(((matF - 32) * 5 / 9).toFixed(1)); 
-                
-                const cltF = buffer.getUint16(6, false) / 10.0; 
-                this.data["coolantTemp"] = Number(((cltF - 32) * 5 / 9).toFixed(1));
-                updated = true;
-            }
-            else if (canId === 0x5F3 && byteLen >= 4) {
-                this.data["throttlePosition"] = buffer.getUint16(0, false) / 10.0; 
-                this.data["batteryVoltage"] = buffer.getUint16(2, false) / 10.0; 
-                updated = true;
-            }
-            else if (canId === 0x5F4 && byteLen >= 8) {
-                this.data["airDensityCorrection"] = buffer.getUint16(6, false) / 10.0; 
-                updated = true;
-            }
-            else if (canId === 0x5F5 && byteLen >= 6) {
-                this.data["warmupCorrection"] = buffer.getUint16(0, false) / 10.0; 
-                this.data["tpsBasedAcceleration"] = buffer.getUint16(2, false) / 10.0; 
-                this.data["tpsBasedFuelCut"] = buffer.getUint16(4, false) / 10.0; 
-                updated = true;
-            }
-            else if (canId === 0x5F6 && byteLen >= 6) {
-                this.data["totalfuelCorrection"] = buffer.getUint16(0, false) / 10.0; 
-                this.data["veValueTableBank1"] = buffer.getUint16(2, false) / 10.0; 
-                this.data["veValueTableBank2"] = buffer.getUint16(4, false) / 10.0; 
-                updated = true;
-            }
-            else if (canId === 0x5F7 && byteLen >= 8) {
-                this.data["coldAdvance"] = buffer.getUint16(0, false) / 10.0; 
-                this.data["rateOfchangeOfTPS"] = buffer.getUint16(2, false) / 10.0; 
-                this.data["rateOfChangeOfRPM"] = buffer.getUint16(6, false) * 10.0; 
-                updated = true;
-            }
-            else if (canId === 0x61B && byteLen >= 2) {
-                this.data["syncLossCounter"] = buffer.getUint8(0); 
-                this.data["syncLossReasonCode"] = buffer.getUint8(1); 
-                updated = true;
-            }
-            else if (canId === 0x624 && byteLen >= 6) {
-                this.data["averageFuelFlow"] = buffer.getUint16(4, false); 
-                updated = true;
-            }
+            if (!signals) return null;
 
-            // --- REAR MODULE & GPS ---
-            else if (canId === 0x700 && byteLen >= 1) {
-                const g = buffer.getUint8(0);
-                this.data["gear"] = g === 0 ? "N" : g.toString();
-                updated = true;
-            }
-            else if (canId === 0x701 && byteLen >= 6) {
-                this.data["damperLR"] = buffer.getUint16(0, false);
-                this.data["damperRR"] = buffer.getUint16(2, false);
-                this.data["brakePressure"] = buffer.getUint16(4, false);
-                updated = true;
-            }
-            else if (canId === 0x800 && byteLen >= 8) {
-                this.data["GPS_Latitude"] = buffer.getFloat32(0, true);
-                this.data["GPS_Longitude"] = buffer.getFloat32(4, true);
-                updated = true;
-            }
-            else if (canId === 0x801 && byteLen >= 4) {
-                this.data["GPS_Speed"] = buffer.getFloat32(0, true) * 1.852;
-                updated = true;
-            }
-            else if (canId === 0x777 && byteLen >= 4) {
-                this.data["LAP_MS"] = buffer.getUint32(0, false);
-                updated = true;
-            }
+            const buffer = this.hexToDataView(payloadHex);
             
-            // --- SYSTEM HEALTH ---
-            else if (canId === 0x7FF && byteLen >= 8) {
-                const node = buffer.getUint8(0);
-                const module = node === 1 ? "FRONT" : node === 2 ? "REAR" : null;
+            // Changed from Record<string, number> to Record<string, any> to allow strings like "N" for gear
+            const decodedValues: Record<string, any> = {};
+
+            for (const sig of signals) {
+                let finalVal = 0;
+                let rawVal = 0;
+
+                // 1. Read Raw Bytes based on method
+                if (sig.method === "Float32_LE") {
+                    finalVal = buffer.getFloat32(sig.offset, true); 
+                    rawVal = finalVal;
+                } else {
+                    rawVal = this.readBytes(buffer, sig.offset, sig.size, sig.isSigned);
+                    finalVal = rawVal;
+                }
+
+                // 2. Apply Custom Methods
+                if (sig.method && sig.method !== "Float32_LE") {
+                    switch (sig.method) {
+                        case "Convert_Temp":
+                            const tempInF = rawVal / (sig.divide || 1); 
+                            finalVal = (tempInF - 32) * 5 / 9;
+                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                            continue; // Move to next signal
+
+                        case "Method_Gear":
+                            decodedValues[sig.name] = rawVal === 0 ? "N" : rawVal.toString();
+                            continue; // Move to next signal
+
+                        case "Method_IMU_Acc":
+                            let baseAcc = rawVal / (sig.divide || 100.0); 
+                            baseAcc = this.handleImuBias(sig.name, baseAcc);
+                            decodedValues[sig.name + "_RAW"] = Number(baseAcc);
+                            finalVal = baseAcc;
+                            break;
+                    }
+                } 
                 
-                if (module) {
-                    this.health[module].flags = buffer.getUint8(1);
-                    this.health[module].drops = buffer.getUint16(2, false);
-                    this.health[module].failures = buffer.getUint16(4, false);
-                    this.health[module].queue_free = buffer.getUint8(6);
-                    this.health[module].heartbeat = buffer.getUint8(7);
-                    this.health[module].last_seen = Date.now();
-                    updated = true;
+                // 3. Apply Multipliers and Dividers
+                if (sig.method !== "Method_Gear" && sig.method !== "Convert_Temp") {
+                    const mult = sig.multiply ?? 1;
+                    const div = sig.divide ?? 1;
+                    const add = sig.add ?? 0;
+                    finalVal = (finalVal * mult / div) + add;
+                    
+                    if (sig.filter === true) {
+                        finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                    }
+                    
+                    decodedValues[sig.name] = Number(finalVal.toFixed(6));
                 }
             }
 
-            if (updated) {
-                return { 
-                    timestamp, 
-                    canId: canId.toString(16).toUpperCase().padStart(4, '0'), 
-                    ...this.data, 
-                    health: this.health 
-                };
+            // IMU Rotation Logic
+            if (canId === "0501") {
+                this.lastAccel = [
+                    decodedValues["accelerationX_RAW"] !== undefined ? decodedValues["accelerationX_RAW"] : this.lastAccel[0],
+                    decodedValues["accelerationY_RAW"] !== undefined ? decodedValues["accelerationY_RAW"] : this.lastAccel[1],
+                    decodedValues["accelerationZ_RAW"] !== undefined ? decodedValues["accelerationZ_RAW"] : this.lastAccel[2]
+                ];
+
+                const currentSpeed = this.currPos ? this.currPos.speed : 0;
+                this.calibrator.update(this.lastAccel[0], this.lastAccel[1], currentSpeed);
+
+                const [rx, ry, rz] = this.calibrator.rotate(this.lastAccel[0], this.lastAccel[1], this.lastAccel[2]);
+
+                decodedValues["accelerationX_rotated"] = Number(this.applyKalman("accX_leveled", rx, timestamp).toFixed(6));
+                decodedValues["accelerationY_rotated"] = Number(this.applyKalman("accY_leveled", ry, timestamp).toFixed(6));
+                decodedValues["accelerationZ_rotated"] = Number(this.applyKalman("accZ_leveled", rz, timestamp).toFixed(6));
+            } 
+
+            // --- GPS POSITION & LAP TRACKING ---
+            if (decodedValues["GPS_Latitude"] && decodedValues["GPS_Longitude"]) {
+                const lat = decodedValues["GPS_Latitude"];
+                const lon = decodedValues["GPS_Longitude"];
+                const speed = decodedValues["GPS_Speed"] !== undefined ? decodedValues["GPS_Speed"] : (this.currPos ? this.currPos.speed : 0);
+                
+                this.currPos = new GPSPoint(lat, lon, timestamp, speed);
+                
+                if (this.prevPos) {
+                    this.checkCross(timestamp, this.currPos);
+                }
+                
+                this.prevPos = this.currPos;
+            } else if (decodedValues["GPS_Speed"] !== undefined && this.currPos) {
+                this.currPos.speed = decodedValues["GPS_Speed"];
             }
 
-            return null;
+            decodedValues["Distance"] = this.trackLen;
+
+            return { timestamp, canId, ...decodedValues, Distance: this.trackLen };
 
         } catch (e) {
             return null;
         }
     }
 
-    private hexToDataView(hex: string): DataView {
+    // --- ALGORITHMS ---
+
+    handleImuBias(name: string, val: number): number {
+        if (this.imuBias[name] !== undefined) {
+            return val - this.imuBias[name];
+        }
+
+        const speed = this.currPos ? this.currPos.speed : 0;
+        
+        if (speed > 5.0) {
+            return val; 
+        }
+
+        if (!this.imuBuffer[name]) this.imuBuffer[name] = [];
+        
+        if (this.imuBuffer[name].length < this.imuBiasSamples) {
+            this.imuBuffer[name].push(val);
+            return val; 
+        } else if (this.imuBuffer[name].length === this.imuBiasSamples) {
+            const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
+            this.imuBias[name] = sum / this.imuBiasSamples;
+            
+            if (name.includes("accelerationZ")) {
+                this.imuBias[name] -= 1.0; 
+            }
+            
+            return val - this.imuBias[name];
+        }
+        return val;
+    }
+
+    applyKalman(name: string, val: number, timestamp: number): number {
+        if (!this.filtersKalman[name]) {
+            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
+            let R = 0.5; 
+            
+            if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
+                R = 0.1; 
+            }
+
+            this.filtersKalman[name] = new KalmanFilter2D(Q, R);
+        }
+
+        return this.filtersKalman[name].filter(val, timestamp);
+    }
+
+    applyLPF(name: string, val: number): number {
+        if (!this.filtersLPF[name]) {
+            this.filtersLPF[name] = new LowPassFilter(0.15); 
+        }
+        return this.filtersLPF[name].filter(val);
+    } 
+
+    // --- LAP LOGIC ---
+    checkCross(time: number, curr: GPSPoint) {
+        if (!this.prevPos) return;
+        const prev = this.prevPos;
+        const dist = this.haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+
+        Object.keys(this.gateCheckers).forEach(gateName => {
+            if (gateName.startsWith("T")) {
+                if (!this.currentLap[gateName]) {
+                    const turnGate = this.gateCheckers[gateName];
+                    turnGate.update_points(prev, curr);
+
+                    if (turnGate.get_intersection_time()) {
+                        const tTurn = turnGate.get_time();
+                        if (tTurn) {
+                            this.currentLap[gateName] = tTurn;
+                            console.log(`Crossed Turn Gate: ${gateName} at ${tTurn}`);
+                        }
+                    }
+                }
+            }
+        });
+
+        if (this.gateCheckers["S0"]) {
+            const s0 = this.gateCheckers["S0"];
+            s0.update_points(prev, curr);
+            
+            if (s0.get_intersection_time()) {
+                const t0 = s0.get_time();
+                
+                if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
+                    this.currentLap["S3"] = t0; 
+                    this.currentLap["complete"] = true;
+                    this.currentLap["dist"] = this.trackLen;
+                    this.currentLap["ts"] = t0; 
+                    this.currentLap["lap"] = this.lapCount; 
+
+                    this.lapsHistory.push({ ...this.currentLap });
+                    console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
+                    
+                    this.lapCount++;
+                    this.currentLap = { "S0": t0 }; 
+                    this.trackLen = 0;
+                    this.gateIdx = 1;
+                    this.justS0 = true;
+                } 
+                else if (t0 && !this.currentLap["S0"]) {
+                    this.lapCount = 1;
+                    this.currentLap = { "S0": t0 };
+                    this.trackLen = 0;
+                    this.gateIdx = 1;
+                    this.justS0 = true;
+                    console.log("Session Started at S0");
+                }
+            }
+        }
+
+        const seq = ["S0", "S1", "S2"];
+        if (this.gateIdx > 0 && this.gateIdx < seq.length) {
+            const targetGate = seq[this.gateIdx];
+            if (this.gateCheckers[targetGate]) {
+                const g = this.gateCheckers[targetGate];
+                g.update_points(prev, curr);
+                
+                if (g.get_intersection_time()) {
+                    const t = g.get_time();
+                    if (t) {
+                        this.currentLap[targetGate] = t;
+                        console.log(`Crossed ${targetGate}`);
+                        this.gateIdx++;
+                    }
+                }
+            }
+        }
+
+        if (this.gateIdx > 0 && !this.justS0) {
+            this.trackLen += dist;
+        }
+        this.justS0 = false;
+        this.prevPos = curr; 
+    }
+    
+    getGatesData() {
+        return {
+            timestamps: this.lapsHistory.map(l => l.ts || 0),
+            lap_data: this.lapsHistory
+        };
+    }
+
+    haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
+        const R = 6371000;
+        const toRad = (d: number) => d * Math.PI / 180;
+        const dLat = toRad(lat2 - lat1);
+        const dLon = toRad(lon2 - lon1);
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    // --- HELPERS ---
+    hexToDataView(hex: string): DataView {
         hex = hex.replace(/\s+/g, '');
         if (hex.length % 2 !== 0) hex = "0" + hex;
-        
         const bytes = new Uint8Array(hex.length / 2);
         for (let i = 0; i < bytes.length; i++) {
             bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
         }
-        
         return new DataView(bytes.buffer);
+    }
+
+    // Natively handles the (Byte[0] << 8) | Byte[1] via the false flag on getUint16
+    readBytes(view: DataView, offset: number, size: number, isSigned: boolean = false): number {
+        if (offset + size > view.byteLength) return 0;
+        try {
+            switch (size) {
+                case 1: return isSigned ? view.getInt8(offset) : view.getUint8(offset);
+                case 2: return isSigned ? view.getInt16(offset, false) : view.getUint16(offset, false); 
+                case 4: return isSigned ? view.getInt32(offset, false) : view.getUint32(offset, false);
+                case 3: 
+                    const b0 = view.getUint8(offset);
+                    const b1 = view.getUint8(offset + 1);
+                    const b2 = view.getUint8(offset + 2);
+                    return (b0 << 16) | (b1 << 8) | b2;
+                default: return 0;
+            }
+        } catch (e) {
+            return 0;
+        }
     }
 }
