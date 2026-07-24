@@ -1,13 +1,14 @@
 import mqtt from 'mqtt';
 import { useMqttStore } from '../store/MqttStore';
 // import { CANDecoder } from './CANDecoder'; // 1. Import Class
-import {CANDecoderV2} from './CANDecoder_V2';
+import { CANDecoderLive } from './CANDcoderLive';
 import { Track } from '@telemetry/shared';
 
 // Create a single instance for live decoding
 
-const decoder = new CANDecoderV2();
+const decoder = new CANDecoderLive();
 export const MqttService = {
+    
   client: null as mqtt.MqttClient | null,
 
   
