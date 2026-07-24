@@ -13,6 +13,7 @@ import MultiLineChart from "../../components/MultiLineChart";
 import RPMChart from "../../components/RPMChart";
 import SpeedChart from "../../components/SpeedChart";
 import BrakePressureChart from "../../components/BrakePressureChart";
+import GearDisplay from "../../components/GearDisplay";
 
 // Constants
 const MAX_DATA_POINTS = 200; 
@@ -165,9 +166,9 @@ export default function LiveDashboard() {
   }, [decodedBuffer, committed]);
 
   // --- GAUGE DATA ---
-  const latestRpm = useMemo(() => {
-    if (!lineDataEngine.rpm || lineDataEngine.rpm.length === 0) return 0;
-    return lineDataEngine.rpm[lineDataEngine.rpm.length - 1] ?? 0;
+  const latestGear = useMemo(() => {
+    if (!lineDataEngine.gear || lineDataEngine.gear.length === 0) return "N";
+    return lineDataEngine.gear[lineDataEngine.gear.length - 1] ?? "N";
   }, [lineDataEngine]);
 
   const latestBrake = useMemo(() => {
@@ -380,7 +381,7 @@ export default function LiveDashboard() {
         {/* Gauges */}
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             <div className="bg-white p-4 shadow rounded-lg flex justify-center">
-                <RPMChart data={latestRpm} height={300} width={300} />
+                <GearDisplay data={latestGear} height={300} width={300} />
             </div>
             <div className="bg-white p-4 shadow rounded-lg flex justify-center">
                 <SpeedChart data={latestSpeed} height={300} width={300} />

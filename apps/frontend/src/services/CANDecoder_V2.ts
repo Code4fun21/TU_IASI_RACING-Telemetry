@@ -293,7 +293,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 
     // GPS_SPD (float32, Multiply by 1.852)
     "0751": [
-        { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE", multiply: 1.852 } 
+        { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE", multiply: 1 } 
     ],
 
     // LAP TIME (uint32)
@@ -419,7 +419,7 @@ export class CANDecoderV2 {
 
     parse(rawString: string) {
 
-        console.log(`%c[RAW CAN MESSAGE] ${rawString}`, 'color: #ffaa00; font-family: monospace;');
+        // console.log(`%c[RAW CAN MESSAGE] ${rawString}`, 'color: #ffaa00; font-family: monospace;');
         try {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
@@ -512,7 +512,7 @@ export class CANDecoderV2 {
                 const lon = decodedValues["GPS_Longitude"];
                 const speed = decodedValues["GPS_Speed"] !== undefined ? decodedValues["GPS_Speed"] : (this.currPos ? this.currPos.speed : 0);
                 
-                console.log(`%c[GPS POS Decoded] Lat: ${lat}, Lon: ${lon}`, 'color: #00ff00; font-weight: bold;');
+                // console.log(`%c[GPS POS Decoded] Lat: ${lat}, Lon: ${lon}`, 'color: #00ff00; font-weight: bold;');
 
                 this.currPos = new GPSPoint(lat, lon, timestamp, speed);
                 
