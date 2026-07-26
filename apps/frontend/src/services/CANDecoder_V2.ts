@@ -396,7 +396,7 @@ export class CANDecoderV2 {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
-            const date = new Date(timestamp * 1000);
+            const date = new Date(timestamp );
 
             // Format time using toLocaleTimeString()
             const timeString = date.toLocaleTimeString();
