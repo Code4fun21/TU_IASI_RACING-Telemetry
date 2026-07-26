@@ -396,11 +396,12 @@ export class CANDecoderV2 {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
-            const date = new Date(timestamp );
-
-            // Format time using toLocaleTimeString()
-            const timeString = date.toLocaleTimeString();
-            console.log("Time:", timeString);
+           
+            
+            console.log("Raw String:", parts[0]);
+            console.log("Parsed Number:", parts[0]);
+            console.log("Unix Timestamp (ms):", timestamp);
+            console.log("Normal Time:", new Date(timestamp).toLocaleString());
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
