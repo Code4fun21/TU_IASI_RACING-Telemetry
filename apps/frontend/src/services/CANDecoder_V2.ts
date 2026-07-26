@@ -133,7 +133,6 @@ class StaticCalibrator {
         return [x_leveled * -1, y_leveled * -1, z_final];
     }
 }
-
 // ==========================================
 // 2. LAP TIMING ALGORITHMS
 // ==========================================
@@ -147,7 +146,7 @@ class GPSPoint {
     constructor(lat: number, lon: number, timestamp: number, speed: number) {
         this.lat = lat;
         this.lon = lon;
-        this.timestamp = timestamp + 1785056125;
+        this.timestamp = timestamp;
         this.speed = speed;
     }
 }
@@ -335,25 +334,10 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
-// ==========================================
-// 4. THE DECODER V2 CLASS
-// ==========================================
-
-export class CANDecoderV2 {
-    filtersLPF: Record<string, LowPassFilter> = {};
-    filtersKalman: Record<string, KalmanFilter2D> = {};
-
-    calibrator = new StaticCalibrator();
-    lastAccel = [0, 0, 0];
-    lastGyro = [0, 0, 0];
-    
+export class CANDecoderLive {
     mainCoords: [number, number]; 
     prevPos: GPSPoint | null = null;
     currPos: GPSPoint | null = null;
-
-    imuBiasSamples: number;
-    imuBuffer: Record<string, number[]>;
-    imuBias: Record<string, number>;
     
     gateCheckers: Record<string, GPS_Intersection> = {};
     currentLap: Record<string, number | boolean | number> = {};
@@ -365,17 +349,10 @@ export class CANDecoderV2 {
 
     constructor() {
         this.mainCoords = [0, 0];
-        this.imuBiasSamples = 25; 
-        this.imuBuffer = {
-            accelerationX: [], accelerationY: [], accelerationZ: [],
-            gyroX: [], gyroY: [], gyroZ: []
-        };
-        this.imuBias = {};
     }
 
     async setBaseCoordinates(trackData: any) {
         if (!trackData) {
-            console.warn("No trackData provided to setBaseCoordinates");
             return;
         }
 
@@ -387,14 +364,12 @@ export class CANDecoderV2 {
                 const data = await api.fetchJsonFile(trackData.gates);
                 this.initializeGates(data);
             } catch (err) {
-                console.warn("Failed to download Gates file:", err);
             }
         }
     }
 
     initializeGates(data: any) {
         if (!Array.isArray(data) || data.length === 0) {
-            console.warn("Gates data is empty or invalid.");
             return;
         }
 
@@ -413,18 +388,14 @@ export class CANDecoderV2 {
             const gateName = g.name || `Gate_${Math.random().toString(36).substr(2, 5)}`;
             this.gateCheckers[gateName] = new GPS_Intersection(gL, gR);
         });
-
-        console.log(`Decoder V2 Initialized: Base [${lat}, ${lon}], Gates: ${Object.keys(this.gateCheckers).length}`);
     }
 
     parse(rawString: string) {
-
-        // console.log(`%c[RAW CAN MESSAGE] ${rawString}`, 'color: #ffaa00; font-family: monospace;');
         try {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
 
-            const timestamp = Number(parts[0])+ 1785056125;
+            const timestamp = Number(parts[0]) + 1785056125000;
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
@@ -434,15 +405,12 @@ export class CANDecoderV2 {
             if (!signals) return null;
 
             const buffer = this.hexToDataView(payloadHex);
-            
-            
             const decodedValues: Record<string, any> = {};
 
             for (const sig of signals) {
                 let finalVal = 0;
                 let rawVal = 0;
 
-                // 1. Read Raw Bytes based on method
                 if (sig.method === "Float32_LE") {
                     finalVal = buffer.getFloat32(sig.offset, true); 
                     rawVal = finalVal;
@@ -451,69 +419,41 @@ export class CANDecoderV2 {
                     finalVal = rawVal;
                 }
 
-                // 2. Apply Custom Methods
                 if (sig.method && sig.method !== "Float32_LE") {
                     switch (sig.method) {
                         case "Convert_Temp":
                             const tempInF = rawVal / (sig.divide || 1); 
                             finalVal = (tempInF - 32) * 5 / 9;
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
-                            continue; // Move to next signal
+                            continue;
 
                         case "Method_Gear":
                             decodedValues[sig.name] = rawVal === 0 ? "N" : rawVal.toString();
-                            continue; // Move to next signal
+                            continue;
 
                         case "Method_IMU_Acc":
-                            let baseAcc = rawVal / (sig.divide || 100.0); 
-                            baseAcc = this.handleImuBias(sig.name, baseAcc);
-                            decodedValues[sig.name + "_RAW"] = Number(baseAcc);
-                            finalVal = baseAcc;
-                            break;
+                            finalVal = rawVal / (sig.divide || 100.0); 
+                            decodedValues[sig.name + "_RAW"] = Number(finalVal);
+                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                            continue; 
                     }
                 } 
                 
-                // 3. Apply Multipliers and Dividers
                 if (sig.method !== "Method_Gear" && sig.method !== "Convert_Temp") {
                     const mult = sig.multiply ?? 1;
                     const div = sig.divide ?? 1;
                     const add = sig.add ?? 0;
                     finalVal = (finalVal * mult / div) + add;
                     
-                    if (sig.filter === true) {
-                        finalVal = this.applyKalman(sig.name, finalVal, timestamp);
-                    }
-                    
                     decodedValues[sig.name] = Number(finalVal.toFixed(6));
                 }
             }
 
-            // IMU Rotation Logic
-            if (canId === "0501") {
-                this.lastAccel = [
-                    decodedValues["accelerationX_RAW"] !== undefined ? decodedValues["accelerationX_RAW"] : this.lastAccel[0],
-                    decodedValues["accelerationY_RAW"] !== undefined ? decodedValues["accelerationY_RAW"] : this.lastAccel[1],
-                    decodedValues["accelerationZ_RAW"] !== undefined ? decodedValues["accelerationZ_RAW"] : this.lastAccel[2]
-                ];
-
-                const currentSpeed = this.currPos ? this.currPos.speed : 0;
-                this.calibrator.update(this.lastAccel[0], this.lastAccel[1], currentSpeed);
-
-                const [rx, ry, rz] = this.calibrator.rotate(this.lastAccel[0], this.lastAccel[1], this.lastAccel[2]);
-
-                decodedValues["accelerationX_rotated"] = Number(this.applyKalman("accX_leveled", rx, timestamp).toFixed(6));
-                decodedValues["accelerationY_rotated"] = Number(this.applyKalman("accY_leveled", ry, timestamp).toFixed(6));
-                decodedValues["accelerationZ_rotated"] = Number(this.applyKalman("accZ_leveled", rz, timestamp).toFixed(6));
-            } 
-
-            // --- GPS POSITION & LAP TRACKING ---
             if (decodedValues["GPS_Latitude"] && decodedValues["GPS_Longitude"]) {
                 const lat = decodedValues["GPS_Latitude"];
                 const lon = decodedValues["GPS_Longitude"];
                 const speed = decodedValues["GPS_Speed"] !== undefined ? decodedValues["GPS_Speed"] : (this.currPos ? this.currPos.speed : 0);
                 
-                // console.log(`%c[GPS POS Decoded] Lat: ${lat}, Lon: ${lon}`, 'color: #00ff00; font-weight: bold;');
-
                 this.currPos = new GPSPoint(lat, lon, timestamp, speed);
                 
                 if (this.prevPos) {
@@ -527,67 +467,13 @@ export class CANDecoderV2 {
 
             decodedValues["Distance"] = this.trackLen;
 
-            return { timestamp, canId, ...decodedValues, Distance: this.trackLen };
+            return { timestamp, canId, ...decodedValues };
 
         } catch (e) {
             return null;
         }
     }
 
-    // --- ALGORITHMS ---
-
-    handleImuBias(name: string, val: number): number {
-        if (this.imuBias[name] !== undefined) {
-            return val - this.imuBias[name];
-        }
-
-        const speed = this.currPos ? this.currPos.speed : 0;
-        
-        if (speed > 5.0) {
-            return val; 
-        }
-
-        if (!this.imuBuffer[name]) this.imuBuffer[name] = [];
-        
-        if (this.imuBuffer[name].length < this.imuBiasSamples) {
-            this.imuBuffer[name].push(val);
-            return val; 
-        } else if (this.imuBuffer[name].length === this.imuBiasSamples) {
-            const sum = this.imuBuffer[name].reduce((a, b) => a + b, 0);
-            this.imuBias[name] = sum / this.imuBiasSamples;
-            
-            if (name.includes("accelerationZ")) {
-                this.imuBias[name] -= 1.0; 
-            }
-            
-            return val - this.imuBias[name];
-        }
-        return val;
-    }
-
-    applyKalman(name: string, val: number, timestamp: number): number {
-        if (!this.filtersKalman[name]) {
-            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
-            let R = 0.5; 
-            
-            if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
-                R = 0.1; 
-            }
-
-            this.filtersKalman[name] = new KalmanFilter2D(Q, R);
-        }
-
-        return this.filtersKalman[name].filter(val, timestamp);
-    }
-
-    applyLPF(name: string, val: number): number {
-        if (!this.filtersLPF[name]) {
-            this.filtersLPF[name] = new LowPassFilter(0.15); 
-        }
-        return this.filtersLPF[name].filter(val);
-    } 
-
-    // --- LAP LOGIC ---
     checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
         const prev = this.prevPos;
@@ -603,7 +489,6 @@ export class CANDecoderV2 {
                         const tTurn = turnGate.get_time();
                         if (tTurn) {
                             this.currentLap[gateName] = tTurn;
-                            console.log(`Crossed Turn Gate: ${gateName} at ${tTurn}`);
                         }
                     }
                 }
@@ -625,7 +510,6 @@ export class CANDecoderV2 {
                     this.currentLap["lap"] = this.lapCount; 
 
                     this.lapsHistory.push({ ...this.currentLap });
-                    console.log(`Lap ${this.lapCount} Complete:`, this.currentLap);
                     
                     this.lapCount++;
                     this.currentLap = { "S0": t0 }; 
@@ -639,7 +523,6 @@ export class CANDecoderV2 {
                     this.trackLen = 0;
                     this.gateIdx = 1;
                     this.justS0 = true;
-                    console.log("Session Started at S0");
                 }
             }
         }
@@ -655,7 +538,6 @@ export class CANDecoderV2 {
                     const t = g.get_time();
                     if (t) {
                         this.currentLap[targetGate] = t;
-                        console.log(`Crossed ${targetGate}`);
                         this.gateIdx++;
                     }
                 }
@@ -686,9 +568,13 @@ export class CANDecoderV2 {
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    // --- HELPERS ---
     hexToDataView(hex: string): DataView {
         hex = hex.replace(/\s+/g, '');
+        
+        if (/[^0-9A-Fa-f]/.test(hex)) {
+            throw new Error("Invalid hex characters in payload");
+        }
+        
         if (hex.length % 2 !== 0) hex = "0" + hex;
         const bytes = new Uint8Array(hex.length / 2);
         for (let i = 0; i < bytes.length; i++) {
@@ -697,7 +583,6 @@ export class CANDecoderV2 {
         return new DataView(bytes.buffer);
     }
 
-    // Natively handles the (Byte[0] << 8) | Byte[1] via the false flag on getUint16
     readBytes(view: DataView, offset: number, size: number, isSigned: boolean = false): number {
         if (offset + size > view.byteLength) return 0;
         try {
