@@ -396,6 +396,11 @@ export class CANDecoderLive {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
+            const date = new Date(timestamp * 1000);
+
+            // Format time using toLocaleTimeString()
+            const timeString = date.toLocaleTimeString();
+            console.log("Time:", timeString);
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
