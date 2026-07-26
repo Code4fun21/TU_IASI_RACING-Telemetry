@@ -188,16 +188,16 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     }
 
     const yAxis = ready.map((s, i) => {
-      // 1. FIX ZOOM PROBLEM: Smart Scaling based on Unit
-      // This prevents the chart from auto-zooming into 0.001 noise on straights.
-      let min = undefined; // Auto
-      let max = undefined; // Auto
-      
-      if (s.unit === 'G') {
-          min = -10; max = 10; 
-      } else if (s.unit === 'rad/s') {
-          min = -10.0; max = 10.0;
-      }
+          let min = undefined; 
+          let max = undefined; 
+          
+          if (s.unit === 'G' || s.unit === 'rad/s') {
+              // If the actual data max is higher than 10, use the data max. Otherwise, lock to 10.
+              max = (value) => value.max > 10 ? Math.ceil(value.max) : 10;
+              
+              // If the actual data min is lower than -10, use the data min. Otherwise, lock to -10.
+              min = (value) => value.min < -10 ? Math.floor(value.min) : -10;
+          }
 
       return {
         type: "value",
