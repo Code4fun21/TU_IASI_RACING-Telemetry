@@ -334,7 +334,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
-export class CANDecoderLive {
+export class CANDecoder_V2 {
     mainCoords: [number, number]; 
     prevPos: GPSPoint | null = null;
     currPos: GPSPoint | null = null;
