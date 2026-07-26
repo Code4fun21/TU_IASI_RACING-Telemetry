@@ -438,7 +438,7 @@ export class CANDecoderV2 {
                             continue;
 
                         case "Method_IMU_Acc":
-                            finalVal = rawVal ;/// (sig.divide || 100.0); 
+                            finalVal = rawVal / (sig.divide || 100.0); 
                             decodedValues[sig.name + "_RAW"] = Number(finalVal);
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
                             continue; 
