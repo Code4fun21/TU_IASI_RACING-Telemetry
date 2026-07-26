@@ -424,7 +424,7 @@ export class CANDecoderV2 {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
 
-            const timestamp = Number(parts[0] + 1785056125);
+            const timestamp = Number(parts[0])+ 1785056125;
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
