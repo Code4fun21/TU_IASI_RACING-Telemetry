@@ -502,7 +502,7 @@ export class CANDecoderV2 {
             let R = 0.5; 
             
             if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
-                R = 0.1; 
+                R = 0.5; 
             }
 
             this.filtersKalman[name] = new KalmanFilter2D(Q, R);
