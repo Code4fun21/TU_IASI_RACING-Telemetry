@@ -21,7 +21,7 @@ class KalmanFilter2D {
         this.P = [[1, 0], [0, 1]];
     }
 
-    filter(measurement: number, timestamp: number): number {
+filter(measurement: number, timestamp: number): number {
         if (this.first) {
             this.x = [0, measurement];
             this.lastTime = timestamp;
@@ -29,7 +29,8 @@ class KalmanFilter2D {
             return measurement;
         }
 
-        let dt = timestamp - this.lastTime;
+        // FIX: Convert ms to seconds so the covariance matrices don't explode
+        let dt = (timestamp - this.lastTime) / 1000.0; 
         if (dt < 0) dt = 0;
         this.lastTime = timestamp;
 
@@ -259,10 +260,11 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
     
     // ACCEL (int16, Big Endian, formula: / 100.0)
+    // ACCEL (int16, Big Endian, formula: / 100.0 to keep m/s^2)
     "0501": [
-        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
-        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
-        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 }
+        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
+        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
+        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true }
     ],
 
     // GYRO (int16, Big Endian, formula: / 100.0)
@@ -335,6 +337,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 };
 
 export class CANDecoderV2 {
+    filtersLPF: Record<string, LowPassFilter> = {};
+    filtersKalman: Record<string, KalmanFilter2D> = {};
     mainCoords: [number, number]; 
     prevPos: GPSPoint | null = null;
     currPos: GPSPoint | null = null;
@@ -438,10 +442,22 @@ export class CANDecoderV2 {
                             continue;
 
                         case "Method_IMU_Acc":
-                            finalVal = rawVal / (sig.divide || 100.0); 
-                            decodedValues[sig.name + "_RAW"] = Number(finalVal);
+                            // 1. Calculate the base unfiltered value
+                            const rawUnfiltered = rawVal / (sig.divide || 100.0); 
+                            
+                            // 2. Map the unfiltered signal to the _RAW variable
+                            decodedValues[sig.name + "_RAW"] = Number(rawUnfiltered.toFixed(6));
+                            
+                            finalVal = rawUnfiltered;
+                            
+                            // 3. Apply Kalman Filter
+                            if (sig.filter) {
+                                finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                            }
+                            
+                            // 4. Map the filtered signal to the standard variable
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
-                            continue; 
+                            continue;
                     }
                 } 
                 
@@ -479,6 +495,29 @@ export class CANDecoderV2 {
             return null;
         }
     }
+
+    applyKalman(name: string, val: number, timestamp: number): number {
+        if (!this.filtersKalman[name]) {
+            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
+            let R = 0.5; 
+            
+            if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
+                R = 0.1; 
+            }
+
+            this.filtersKalman[name] = new KalmanFilter2D(Q, R);
+        }
+
+        return this.filtersKalman[name].filter(val, timestamp);
+    }
+
+    applyLPF(name: string, val: number): number {
+        if (!this.filtersLPF[name]) {
+            this.filtersLPF[name] = new LowPassFilter(0.15); 
+        }
+        return this.filtersLPF[name].filter(val);
+    }
+
 
     checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
