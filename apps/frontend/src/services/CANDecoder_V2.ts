@@ -230,6 +230,7 @@ class GPS_Intersection {
         );
     }
 }
+
 // ==========================================
 // 3. CONFIGURATION & DATABASE V2
 // ==========================================
@@ -257,18 +258,18 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "steering",      offset: 4, size: 2, filter: true }  // STR
     ],
     
-    // ACCEL (int16, Big Endian, formula: / 981.0 to convert m/s^2 to G-force)
+    // ACCEL (int16, Big Endian, formula: / 100.0)
     "0501": [
-        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 981, filter: true },
-        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 981, filter: true },
-        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 981, filter: true }
+        { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
+        { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
+        { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 }
     ],
 
     // GYRO (int16, Big Endian, formula: / 100.0)
     "0502": [
-        { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100, filter: true },
-        { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100, filter: true },
-        { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100, filter: true }
+        { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100 },
+        { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100 },
+        { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100 }
     ],
 
     // GEAR (uint8)
@@ -333,14 +334,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
-// ==========================================
-// 4. THE DECODER V2 CLASS
-// ==========================================
-
 export class CANDecoderV2 {
-    filtersLPF: Record<string, LowPassFilter> = {};
-    filtersKalman: Record<string, KalmanFilter2D> = {};
-
     mainCoords: [number, number]; 
     prevPos: GPSPoint | null = null;
     currPos: GPSPoint | null = null;
@@ -402,12 +396,12 @@ export class CANDecoderV2 {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
+           
             
             console.log("Raw String:", parts[0]);
             console.log("Parsed Number:", parts[0]);
             console.log("Unix Timestamp (ms):", timestamp);
             console.log("Normal Time:", new Date(timestamp).toLocaleString());
-            
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
@@ -446,12 +440,6 @@ export class CANDecoderV2 {
                         case "Method_IMU_Acc":
                             finalVal = rawVal / (sig.divide || 100.0); 
                             decodedValues[sig.name + "_RAW"] = Number(finalVal);
-                            
-                            // Apply Kalman Filter (Without Rotating)
-                            if (sig.filter) {
-                                finalVal = this.applyKalman(sig.name, finalVal, timestamp);
-                            }
-                            
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
                             continue; 
                     }
@@ -462,11 +450,6 @@ export class CANDecoderV2 {
                     const div = sig.divide ?? 1;
                     const add = sig.add ?? 0;
                     finalVal = (finalVal * mult / div) + add;
-                    
-                    // Apply Kalman Filter for general signals (including Gyro)
-                    if (sig.filter) {
-                        finalVal = this.applyKalman(sig.name, finalVal, timestamp);
-                    }
                     
                     decodedValues[sig.name] = Number(finalVal.toFixed(6));
                 }
@@ -497,30 +480,6 @@ export class CANDecoderV2 {
         }
     }
 
-    // --- FILTERS ---
-    applyKalman(name: string, val: number, timestamp: number): number {
-        if (!this.filtersKalman[name]) {
-            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
-            let R = 0.5; 
-            
-            if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
-                R = 0.1; 
-            }
-
-            this.filtersKalman[name] = new KalmanFilter2D(Q, R);
-        }
-
-        return this.filtersKalman[name].filter(val, timestamp);
-    }
-
-    applyLPF(name: string, val: number): number {
-        if (!this.filtersLPF[name]) {
-            this.filtersLPF[name] = new LowPassFilter(0.15); 
-        }
-        return this.filtersLPF[name].filter(val);
-    } 
-
-    // --- LAP LOGIC ---
     checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
         const prev = this.prevPos;
