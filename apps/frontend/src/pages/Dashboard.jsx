@@ -908,7 +908,7 @@ const speedVsDistance = useMemo(() => {
                     series={[
                         {
                             name: "Accel X", unit: "G",
-                            time: timeStamps(filtered.Acceleration_on_X_axis_rotated),
+                            time: timeStamps(filtered.Acceleration_on_X_axis_RAW),
                             data: filtered.Acceleration_on_X_axis_rotated?.map(pt => pt[1]) || []
                         },
                         {
