@@ -247,10 +247,6 @@ export class CANDecoderLive {
             const timestamp = Number(parts[0]) + 1785056125000;
 
 
-            console.log("Raw String:", parts[0]);
-            console.log("Parsed Number:", parts[0]);
-            console.log("Unix Timestamp (ms):", timestamp);
-            console.log("Normal Time:", new Date(timestamp).toLocaleString());
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 

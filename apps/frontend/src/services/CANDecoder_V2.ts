@@ -402,10 +402,7 @@ export class CANDecoderV2 {
             const timestamp = Number(parts[0]) + 1785056125000;
            
             
-            console.log("Raw String:", parts[0]);
-            console.log("Parsed Number:", parts[0]);
-            console.log("Unix Timestamp (ms):", timestamp);
-            console.log("Normal Time:", new Date(timestamp).toLocaleString());
+            
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
@@ -502,7 +499,7 @@ export class CANDecoderV2 {
             let R = 0.5; 
             
             if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
-                R = 0.5; 
+                R = 10; 
             }
 
             this.filtersKalman[name] = new KalmanFilter2D(Q, R);
