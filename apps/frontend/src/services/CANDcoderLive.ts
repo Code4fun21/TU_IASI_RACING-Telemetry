@@ -110,9 +110,9 @@ interface SignalConfig {
 
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
     "0500": [
-        { name: "damperLF",      offset: 0, size: 2, filter: true }, 
-        { name: "damperRF",      offset: 2, size: 2, filter: true }, 
-        { name: "steering",      offset: 4, size: 2, filter: true }  
+        { name: "damperLF",      offset: 0, size: 2},
+        { name: "damperRF",      offset: 2, size: 2},
+        { name: "steering",      offset: 4, size: 2}
     ],
     
     "0501": [
@@ -132,9 +132,9 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
 
     "0701": [
-        { name: "damperLR",      offset: 0, size: 2, filter: true }, 
-        { name: "damperRR",      offset: 2, size: 2, filter: true }, 
-        { name: "brakePressure", offset: 4, size: 2, filter: true }  
+        { name: "damperLR",      offset: 0, size: 2},
+        { name: "damperRR",      offset: 2, size: 2},
+        { name: "brakePressure", offset: 4, size: 2}
     ],
 
     "0750": [
@@ -173,8 +173,8 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
     "05F7": [
         { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
-        { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10, filter: true   },
-        { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10, filter: true }
+        { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10 },
+        { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10}
     ],
     "061B": [
         { name: "syncLossCounter",     offset: 0, size: 1 },
@@ -244,7 +244,13 @@ export class CANDecoderLive {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
 
-            const timestamp = Number(parts[0]);
+            const timestamp = Number(parts[0]) + 1785056125000;
+
+
+            console.log("Raw String:", parts[0]);
+            console.log("Parsed Number:", parts[0]);
+            console.log("Unix Timestamp (ms):", timestamp);
+            console.log("Normal Time:", new Date(timestamp).toLocaleString());
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
 
