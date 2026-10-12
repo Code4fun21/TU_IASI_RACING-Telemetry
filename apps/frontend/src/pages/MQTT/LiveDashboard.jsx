@@ -4,6 +4,7 @@ import { useMqttStore } from "../../store/MqttStore";
 import { MqttService } from "../../../src/services/MqttServices"; 
 import { api } from "../../services/api";
 import { transformToColumnar } from "../../services/DataTransformer";
+import { useRef } from "react";
 
 // Components
 import MapChart from "../../components/MapChart"; 
