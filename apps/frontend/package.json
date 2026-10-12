@@ -8,12 +8,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@turf/turf": "^7.3.1",
     "@headlessui/react": "^2.2.0",
     "@heroicons/react": "^2.2.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/react-query": "^5.66.5",
     "@telemetry/shared": "workspace:*",
+    "@turf/turf": "^7.3.1",
     "@types/mqtt": "^2.5.0",
     "@types/papaparse": "^5.5.0",
     "axios": "^1.7.9",
@@ -21,6 +21,7 @@
     "echarts-for-react": "^3.0.5",
     "mqtt": "^5.14.1",
     "papaparse": "^5.5.3",
+    "prop-types": "^15.8.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-icons": "^5.5.0",

@@ -57,6 +57,28 @@ export default function LiveDashboard() {
   const [staged, setStaged] = useState([]);       
   const [committed, setCommitted] = useState([]); 
 
+  const [isReceiving, setIsReceiving] = useState(false);
+  const receiveTimeout = useRef(null);
+  
+  // Watch for buffer changes to trigger the "receiving" indicator
+  useEffect(() => {
+    if (decodedBuffer.length > 0) {
+      setIsReceiving(true);
+      
+      // Clear existing timeout
+      if (receiveTimeout.current) clearTimeout(receiveTimeout.current);
+      
+      // Set indicator back to false if no new data arrives within 1 second
+      receiveTimeout.current = setTimeout(() => {
+        setIsReceiving(false);
+      }, 1000);
+    }
+    
+    return () => {
+      if (receiveTimeout.current) clearTimeout(receiveTimeout.current);
+    }
+  }, [decodedBuffer.length]);
+
   const readBlobAsText = (blob) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
