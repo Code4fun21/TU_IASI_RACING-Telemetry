@@ -287,14 +287,14 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
 
     // GPS_POS (float32, Little Endian directly from memcpy)
-    "0750": [
+    "0800": [
         { name: "GPS_Latitude",  offset: 0, size: 4, method: "Float32_LE" }, 
         { name: "GPS_Longitude", offset: 4, size: 4, method: "Float32_LE" }
     ],
 
     // GPS_SPD (float32, Multiply by 1.852)
-    "0751": [
-        { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE", multiply: 1 } 
+    "0801": [
+        { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE", multiply: 1.852 }
     ],
 
     // LAP TIME (uint32)
