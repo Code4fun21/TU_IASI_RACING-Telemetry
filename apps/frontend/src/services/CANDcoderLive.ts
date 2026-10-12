@@ -137,16 +137,16 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "brakePressure", offset: 4, size: 2}
     ],
 
-    "0750": [
+    "0800": [
         { name: "GPS_Latitude",  offset: 0, size: 4, method: "Float32_LE" }, 
         { name: "GPS_Longitude", offset: 4, size: 4, method: "Float32_LE" }
     ],
 
-    "0751": [
+    "0801": [
         { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE" } 
     ],
 
-    "0777": [
+    "0900": [
         { name: "LAP_MS",        offset: 0, size: 4 } 
     ],
 
