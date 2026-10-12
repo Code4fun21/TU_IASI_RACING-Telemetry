@@ -12,6 +12,7 @@
     "@heroicons/react": "^2.2.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tanstack/react-query": "^5.66.5",
+    "@telemetry/shared": "workspace:*",
     "@turf/turf": "^7.3.1",
     "@types/mqtt": "^2.5.0",
     "@types/papaparse": "^5.5.0",
