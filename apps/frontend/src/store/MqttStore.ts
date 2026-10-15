@@ -21,7 +21,7 @@ export const useMqttStore = create<MqttState>((set) => ({
   decodedBuffer: [],
   currentData: null,
 
-  addMessage: (raw, decoded) => set((state) => ({
+addMessage: (raw, decoded) => set((state) => {
     if (decoded) {
         state.decodedBuffer.push(decoded);
     }
@@ -31,7 +31,7 @@ export const useMqttStore = create<MqttState>((set) => ({
         decodedBuffer: state.decodedBuffer,
         currentData: decoded || state.currentData,
     };
-  })),
+  }),
 
   clearBuffer: () => set({ rawBuffer: [], decodedBuffer: [], currentData: null }),
   setStatus: (connected) => set({ isConnected: connected }),
