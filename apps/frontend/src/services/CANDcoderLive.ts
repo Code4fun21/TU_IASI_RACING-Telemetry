@@ -109,78 +109,78 @@ interface SignalConfig {
 }
 
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
-    "0500": [
+    "500": [
         { name: "damperLF",      offset: 0, size: 2},
         { name: "damperRF",      offset: 2, size: 2},
         { name: "steering",      offset: 4, size: 2}
     ],
     
-    "0501": [
+    "501": [
         { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
         { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
         { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 }
     ],
 
-    "0502": [
+    "502": [
         { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100 },
         { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100 },
         { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100 }
     ],
 
-    "0700": [
+    "700": [
         { name: "gear",          offset: 0, size: 1, method: "Method_Gear" }
     ],
 
-    "0701": [
+    "701": [
         { name: "damperLR",      offset: 0, size: 2},
         { name: "damperRR",      offset: 2, size: 2},
         { name: "brakePressure", offset: 4, size: 2}
     ],
 
-    "0750": [
+    "750": [
         { name: "GPS_Latitude",  offset: 0, size: 4, method: "Float32_LE" }, 
         { name: "GPS_Longitude", offset: 4, size: 4, method: "Float32_LE" }
     ],
 
-    "0751": [
+    "751": [
         { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE" } 
     ],
 
-    "0777": [
+    "777": [
         { name: "LAP_MS",        offset: 0, size: 4 } 
     ],
 
-    "05F0": [{ name: "rpm", offset: 6, size: 2 }],
-    "05F2": [
+    "5F0": [{ name: "rpm", offset: 6, size: 2 }],
+    "5F2": [
         { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
         { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10, method:"Convert_Temp" },
         { name: "coolantTemp",         offset: 6, size: 2, divide: 10, method:"Convert_Temp" }
     ],
-    "05F3": [
+    "5F3": [
         { name: "throttlePosition", offset: 0, size: 2, divide: 10 },
         { name: "batteryVoltage",   offset: 2, size: 2, divide: 10 }
     ],
-    "05F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide:10 }],
-    "05F5": [
+    "5F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide:10 }],
+    "5F5": [
         { name: "warmupCorrection",     offset: 0, size: 2, divide: 10 },
         { name: "tpsBasedAcceleration", offset: 2, size: 2, divide: 10 },
         { name: "tpsBasedFuelCut",      offset: 4, size: 2, divide: 10 }
     ],
-    "05F6": [
+    "5F6": [
         { name: "totalfuelCorrection", offset: 0, size: 2, divide: 10 },
         { name: "veValueTableBank1",   offset: 2, size: 2, divide: 10 },
         { name: "veValueTableBank2",   offset: 4, size: 2, divide: 10 }
     ],
-    "05F7": [
+    "5F7": [
         { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
         { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10 },
         { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10}
     ],
-    "061B": [
+    "61B": [
         { name: "syncLossCounter",     offset: 0, size: 1 },
         { name: "syncLossReasonCode",  offset: 1, size: 1 }
     ],
-    "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
+    "624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
 export class CANDecoderLive {
@@ -239,24 +239,75 @@ export class CANDecoderLive {
         });
     }
 
-    parse(rawString: string) {
+     parse(rawString: string) {
         try {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
-
-
-            let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
-            if (canId.length < 4) canId = canId.padStart(4, "0");
-
+            const canIdStr = parts[1].trim();
+            // Fast integer parsing for ID instead of string matching
+            const canIdInt = parseInt(canIdStr, 16); 
+            
             const payloadHex = parts[2].trim();
+            const buffer = this.hexToDataView(payloadHex);
+            const decodedValues: Record<string, any> = {};
+
+            
+            if (canIdInt === 0x0501 && buffer.byteLength >= 6) { // ACCEL
+                decodedValues["accelerationX"] = buffer.getInt16(0, false) / 100.0;
+                decodedValues["accelerationY"] = buffer.getInt16(2, false) / 100.0;
+                decodedValues["accelerationZ"] = buffer.getInt16(4, false) / 100.0;
+                decodedValues["accelerationX_RAW"] = decodedValues["accelerationX"];
+                decodedValues["accelerationY_RAW"] = decodedValues["accelerationY"];
+                decodedValues["accelerationZ_RAW"] = decodedValues["accelerationZ"];
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+            if (canIdInt === 0x0502 && buffer.byteLength >= 6) { // GYRO
+                decodedValues["gyroX"] = buffer.getInt16(0, false) / 100.0;
+                decodedValues["gyroY"] = buffer.getInt16(2, false) / 100.0;
+                decodedValues["gyroZ"] = buffer.getInt16(4, false) / 100.0;
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+            if (canIdInt === 0x0700 && buffer.byteLength >= 1) { // GEAR
+                const gear = buffer.getUint8(0);
+                decodedValues["gear"] = gear === 0 ? "N" : gear.toString();
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+            if (canIdInt === 0x0800 && buffer.byteLength >= 8) { // GPS POS
+                const lat = buffer.getFloat32(0, true);
+                const lon = buffer.getFloat32(4, true);
+                decodedValues["GPS_Latitude"] = lat;
+                decodedValues["GPS_Longitude"] = lon;
+                
+                // Track state
+                const speed = this.currPos ? this.currPos.speed : 0;
+                this.currPos = new GPSPoint(lat, lon, timestamp, speed);
+                if (this.prevPos) this.checkCross(timestamp, this.currPos);
+                this.prevPos = this.currPos;
+                decodedValues["Distance"] = this.trackLen;
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+            if (canIdInt === 0x0801 && buffer.byteLength >= 4) { // GPS SPD
+                const spd = buffer.getFloat32(0, true);
+                decodedValues["GPS_Speed"] = spd; // Note: if you want km/h * 1.852 here
+                if (this.currPos) this.currPos.speed = spd;
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+            if (canIdInt === 0x0900 && buffer.byteLength >= 4) { // LAP
+                decodedValues["LAP_MS"] = buffer.getUint32(0, false);
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+
+            // FALLBACK TO DYNAMIC DATABASE PARSER
+            let canId = canIdStr.replace(/^0x/i, '').toUpperCase();
+            if (canId.length < 4) canId = canId.padStart(4, "0");
             const signals = CAN_DATABASE[canId];
 
             if (!signals) return null;
 
-            const buffer = this.hexToDataView(payloadHex);
-            const decodedValues: Record<string, any> = {};
+
+            
 
             for (const sig of signals) {
                 let finalVal = 0;
@@ -420,16 +471,11 @@ export class CANDecoderLive {
     }
 
     hexToDataView(hex: string): DataView {
-        hex = hex.replace(/\s+/g, '');
-        
-        if (/[^0-9A-Fa-f]/.test(hex)) {
-            throw new Error("Invalid hex characters in payload");
-        }
-        
-        if (hex.length % 2 !== 0) hex = "0" + hex;
-        const bytes = new Uint8Array(hex.length / 2);
-        for (let i = 0; i < bytes.length; i++) {
-            bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        // Fast, allocation-light hex decoding (avoids regex and slice)
+        const hexLen = hex.length;
+        const bytes = new Uint8Array(hexLen / 2);
+        for (let i = 0, j = 0; i < hexLen; i += 2, j++) {
+            bytes[j] = parseInt(hex.substring(i, i + 2), 16);
         }
         return new DataView(bytes.buffer);
     }
