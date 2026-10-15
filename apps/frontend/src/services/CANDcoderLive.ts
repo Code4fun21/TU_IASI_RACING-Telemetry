@@ -109,78 +109,78 @@ interface SignalConfig {
 }
 
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
-    "500": [
+    "0500": [
         { name: "damperLF",      offset: 0, size: 2},
         { name: "damperRF",      offset: 2, size: 2},
         { name: "steering",      offset: 4, size: 2}
     ],
     
-    "501": [
+    "0501": [
         { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
         { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 },
         { name: "accelerationZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100 }
     ],
 
-    "502": [
+    "0502": [
         { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100 },
         { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100 },
         { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100 }
     ],
 
-    "700": [
+    "0700": [
         { name: "gear",          offset: 0, size: 1, method: "Method_Gear" }
     ],
 
-    "701": [
+    "0701": [
         { name: "damperLR",      offset: 0, size: 2},
         { name: "damperRR",      offset: 2, size: 2},
         { name: "brakePressure", offset: 4, size: 2}
     ],
 
-    "750": [
+    "0750": [
         { name: "GPS_Latitude",  offset: 0, size: 4, method: "Float32_LE" }, 
         { name: "GPS_Longitude", offset: 4, size: 4, method: "Float32_LE" }
     ],
 
-    "751": [
+    "0751": [
         { name: "GPS_Speed",     offset: 0, size: 4, method: "Float32_LE" } 
     ],
 
-    "777": [
+    "0777": [
         { name: "LAP_MS",        offset: 0, size: 4 } 
     ],
 
-    "5F0": [{ name: "rpm", offset: 6, size: 2 }],
-    "5F2": [
+    "05F0": [{ name: "rpm", offset: 6, size: 2 }],
+    "05F2": [
         { name: "manifoldAirPressure", offset: 2, size: 2, divide: 10 },
         { name: "manifoldAirTemp",     offset: 4, size: 2, divide: 10, method:"Convert_Temp" },
         { name: "coolantTemp",         offset: 6, size: 2, divide: 10, method:"Convert_Temp" }
     ],
-    "5F3": [
+    "05F3": [
         { name: "throttlePosition", offset: 0, size: 2, divide: 10 },
         { name: "batteryVoltage",   offset: 2, size: 2, divide: 10 }
     ],
-    "5F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide:10 }],
-    "5F5": [
+    "05F4": [{ name: "airDensityCorrection", offset: 6, size: 2, divide:10 }],
+    "05F5": [
         { name: "warmupCorrection",     offset: 0, size: 2, divide: 10 },
         { name: "tpsBasedAcceleration", offset: 2, size: 2, divide: 10 },
         { name: "tpsBasedFuelCut",      offset: 4, size: 2, divide: 10 }
     ],
-    "5F6": [
+    "05F6": [
         { name: "totalfuelCorrection", offset: 0, size: 2, divide: 10 },
         { name: "veValueTableBank1",   offset: 2, size: 2, divide: 10 },
         { name: "veValueTableBank2",   offset: 4, size: 2, divide: 10 }
     ],
-    "5F7": [
+    "05F7": [
         { name: "coldAdvance",         offset: 0, size: 2, divide: 10   },
         { name: "rateOfchangeOfTPS",   offset: 2, size: 2, divide: 10 },
         { name: "rateOfChangeOfRPM",   offset: 6, size: 2, multiply: 10}
     ],
-    "61B": [
+    "061B": [
         { name: "syncLossCounter",     offset: 0, size: 1 },
         { name: "syncLossReasonCode",  offset: 1, size: 1 }
     ],
-    "624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
+    "0624": [{ name: "averageFuelFlow", offset: 4, size: 2 }],
 };
 
 export class CANDecoderLive {
@@ -239,7 +239,7 @@ export class CANDecoderLive {
         });
     }
 
-     parse(rawString: string) {
+    parse(rawString: string) {
         try {
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
@@ -253,7 +253,7 @@ export class CANDecoderLive {
             const buffer = this.hexToDataView(payloadHex);
             const decodedValues: Record<string, any> = {};
 
-            
+            // 🚀 FAST PATH FOR HIGH FREQUENCY DATA (Inspired by the Python script)
             if (canIdInt === 0x0501 && buffer.byteLength >= 6) { // ACCEL
                 decodedValues["accelerationX"] = buffer.getInt16(0, false) / 100.0;
                 decodedValues["accelerationY"] = buffer.getInt16(2, false) / 100.0;
@@ -307,8 +307,9 @@ export class CANDecoderLive {
             if (!signals) return null;
 
 
-            
 
+
+            
             for (const sig of signals) {
                 let finalVal = 0;
                 let rawVal = 0;
@@ -470,7 +471,7 @@ export class CANDecoderLive {
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    hexToDataView(hex: string): DataView {
+      hexToDataView(hex: string): DataView {
         // Fast, allocation-light hex decoding (avoids regex and slice)
         const hexLen = hex.length;
         const bytes = new Uint8Array(hexLen / 2);
