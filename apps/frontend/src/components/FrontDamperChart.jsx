@@ -19,7 +19,7 @@ const FrontDamperChart = ({ leftData, rightData, width = 200, height = 200 }) =>
         yAxis: {
             type: "value",
             min: 0,
-            max: 4095
+            max: 10
         },
         series: [
             {

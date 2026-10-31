@@ -33,7 +33,7 @@ const ALL_SIGNALS = [
     ...VITAL_SIGNALS,
     "GPS_Speed", "GPS_Latitude", "GPS_Longitude", // Explicitly added for custom charts
     "manifoldAirTemp", "oilPressure", "fuelLevel", "steeringAngle",
-    "damperFL", "damperFR", "damperRL", "damperRR",
+    "damperLF", "damperRF", "damperLR", "damperRR",
     "accelerationX", "accelerationY", "accelerationZ",
     "gyroX", "gyroY", "gyroZ"
 ];
@@ -219,6 +219,7 @@ export default function LiveDashboard() {
   }, [lineDataDamper]);
 
   const latestDamperLR = useMemo(() => {
+
     if (!lineDataDamper.damperLR || lineDataDamper.damperLR.length === 0) return 0;
     return lineDataDamper.damperLR[lineDataDamper.damperLR.length - 1] ?? 0;
   }, [lineDataDamper]);
