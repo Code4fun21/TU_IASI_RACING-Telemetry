@@ -298,6 +298,18 @@ export class CANDecoderLive {
                 decodedValues["LAP_MS"] = buffer.getUint32(0, false);
                 return { timestamp, canId: canIdStr, ...decodedValues };
             }
+            if (canIdInt === 0x0500 && buffer.byteLength >= 4) { // FRONT_ANALOG
+                // getUint16(offset, littleEndian) -> false means Big Endian
+                decodedValues["damperLF"] = buffer.getUint16(0, false);
+                decodedValues["damperRF"] = buffer.getUint16(2, false);
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
+
+            if (canIdInt === 0x0701 && buffer.byteLength >= 4) { // REAR_ANALOG
+                decodedValues["damperLR"] = buffer.getUint16(0, false);
+                decodedValues["damperRR"] = buffer.getUint16(2, false);
+                return { timestamp, canId: canIdStr, ...decodedValues };
+            }
 
             // FALLBACK TO DYNAMIC DATABASE PARSER
             let canId = canIdStr.replace(/^0x/i, '').toUpperCase();

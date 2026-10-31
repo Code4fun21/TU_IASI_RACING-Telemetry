@@ -15,11 +15,14 @@ import RPMChart from "../../components/RPMChart";
 import SpeedChart from "../../components/SpeedChart";
 import BrakePressureChart from "../../components/BrakePressureChart";
 import GearDisplay from "../../components/GearDisplay";
+import FrontDamperChart from "../../components/FrontDamperChart";
+import RearDamperChart from "../../components/RearDamperChart";
 
 // Constants
 const MAX_DATA_POINTS = 200; 
 const ENGINE_SIGNALS = ["rpm", "gear", "throttlePosition", "brakePressure"];
 const VITAL_SIGNALS = ["batteryVoltage", "coolantTemp", "manifoldAirPressure"];
+const DAMPER_KEYS = ["damperLF", "damperRF", "damperLR", "damperRR"];
 
 // Re-added Lat and Lon for debugging data flow
 const GPS_KEYS = ["GPS_Speed", "GPS_Latitude", "GPS_Longitude"];
@@ -182,6 +185,7 @@ export default function LiveDashboard() {
   const lineDataEngine = useMemo(() => processDataWithHold(decodedBuffer, ENGINE_SIGNALS), [decodedBuffer]);
   const lineDataVital = useMemo(() => processDataWithHold(decodedBuffer, VITAL_SIGNALS), [decodedBuffer]);
   const lineDataGPS = useMemo(() => processDataWithHold(decodedBuffer, GPS_KEYS), [decodedBuffer]);
+  const lineDataDamper = useMemo(() => processDataWithHold(decodedBuffer, DAMPER_KEYS), [decodedBuffer]);
 
   const lineDataCustom = useMemo(() => {
     if (committed.length === 0) return null;
@@ -203,6 +207,26 @@ export default function LiveDashboard() {
     if (!lineDataGPS.GPS_Speed || lineDataGPS.GPS_Speed.length === 0) return 0;
     return lineDataGPS.GPS_Speed[lineDataGPS.GPS_Speed.length - 1] ?? 0;
   }, [lineDataGPS]);
+
+  const latestDamperLF = useMemo(() => {
+    if (!lineDataDamper.damperLF || lineDataDamper.damperLF.length === 0) return 0;
+    return lineDataDamper.damperLF[lineDataDamper.damperLF.length - 1] ?? 0;
+  }, [lineDataDamper]);
+
+  const latestDamperRF = useMemo(() => {
+    if (!lineDataDamper.damperRF || lineDataDamper.damperRF.length === 0) return 0;
+    return lineDataDamper.damperRF[lineDataDamper.damperRF.length - 1] ?? 0;
+  }, [lineDataDamper]);
+
+  const latestDamperLR = useMemo(() => {
+    if (!lineDataDamper.damperLR || lineDataDamper.damperLR.length === 0) return 0;
+    return lineDataDamper.damperLR[lineDataDamper.damperLR.length - 1] ?? 0;
+  }, [lineDataDamper]);
+
+  const latestDamperRR = useMemo(() => {
+    if (!lineDataDamper.damperRR || lineDataDamper.damperRR.length === 0) return 0;
+    return lineDataDamper.damperRR[lineDataDamper.damperRR.length - 1] ?? 0;
+  }, [lineDataDamper]);
 
   // --- UI HANDLERS FOR CUSTOM CHART ---
   const handleAddSignal = (e) => {
@@ -371,6 +395,31 @@ export default function LiveDashboard() {
             ) : (
                 <p className="text-center text-gray-400 py-10">Waiting for GPS data...</p>
             )}
+        </div>
+
+         {/* --- DAMPER / SUSPENSION SECTION --- */}
+        <div className="flex flex-row justify-center items-center gap-8 p-4 bg-gray-900 rounded shadow-md mt-4">
+            
+            <div className="flex flex-col items-center">
+                <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>
+                <FrontDamperChart 
+                    leftData={latestDamperLF} 
+                    rightData={latestDamperRF} 
+                    width={150} 
+                    height={200} 
+                />
+            </div>
+
+            <div className="flex flex-col items-center">
+                <h3 className="text-white text-sm font-bold mb-2">REAR DAMPERS</h3>
+                <RearDamperChart 
+                    leftData={latestDamperLR} 
+                    rightData={latestDamperRR} 
+                    width={150} 
+                    height={200} 
+                />
+            </div>
+
         </div>
 
         {/* Live Map + Lap Times Panel */}

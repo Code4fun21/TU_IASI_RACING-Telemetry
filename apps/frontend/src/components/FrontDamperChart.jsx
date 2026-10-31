@@ -18,6 +18,8 @@ const FrontDamperChart = ({ leftData, rightData, width = 200, height = 200 }) =>
         },
         yAxis: {
             type: "value",
+            min: 0,
+            max: 4095
         },
         series: [
             {
@@ -37,19 +39,12 @@ const FrontDamperChart = ({ leftData, rightData, width = 200, height = 200 }) =>
         </div>
     );
 };
+
 FrontDamperChart.propTypes = {
     leftData: PropTypes.number.isRequired, // Adjusted to accept a single number
     rightData: PropTypes.number.isRequired, // Adjusted to accept a single number
     width: PropTypes.number, // Width of the chart
     height: PropTypes.number, // Height of the chart
 };
-// RPMChart.propTypes = {
-//     data: PropTypes.arrayOf(
-//         PropTypes.shape({
-//             value: PropTypes.number.isRequired,
-//             name: PropTypes.string.isRequired,
-//         })
-//     ).isRequired,
-// };
 
 export default FrontDamperChart;
