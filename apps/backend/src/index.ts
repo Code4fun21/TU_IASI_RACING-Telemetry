@@ -113,6 +113,8 @@ app.post('/api/sessions',
   }
 );
 
+
+
 app.delete('/api/sessions/:id', 
   usageGuardMiddleware('d1_writes'), // <--- Protect write/delete operations
   async (c) => {
