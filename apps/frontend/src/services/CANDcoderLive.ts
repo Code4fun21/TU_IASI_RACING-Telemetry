@@ -298,16 +298,60 @@ export class CANDecoderLive {
                 decodedValues["LAP_MS"] = buffer.getUint32(0, false);
                 return { timestamp, canId: canIdStr, ...decodedValues };
             }
-            if (canIdInt === 0x0500 && buffer.byteLength >= 4) { // FRONT_ANALOG
-                // getUint16(offset, littleEndian) -> false means Big Endian
-                decodedValues["damperLF"] = buffer.getUint16(0, false);
-                decodedValues["damperRF"] = buffer.getUint16(2, false);
+           if (canIdInt === 0x0500 && buffer.byteLength >= 6) { // FRONT_ANALOG
+                const adcLF = buffer.getUint16(0, false);
+                const adcRF = buffer.getUint16(2, false);
+                const adcStr = buffer.getUint16(4, false);
+
+                // Polynomial conversion for Dampers
+                decodedValues["damperLF"] = Number((
+                    (-7.430249176415e-15) * Math.pow(adcLF, 4) + 
+                    (7.651688555578e-11) * Math.pow(adcLF, 3) + 
+                    (-2.495514301462e-07) * Math.pow(adcLF, 2) + 
+                    (-1.529198785943e-03) * adcLF + 
+                    7.301809527430
+                ).toFixed(6));
+
+                decodedValues["damperRF"] = Number((
+                    (-7.430249176415e-15) * Math.pow(adcRF, 4) + 
+                    (7.651688555578e-11) * Math.pow(adcRF, 3) + 
+                    (-2.495514301462e-07) * Math.pow(adcRF, 2) + 
+                    (-1.529198785943e-03) * adcRF + 
+                    7.301809527430
+                ).toFixed(6));
+
+                decodedValues["steering"] = adcStr;
+                decodedValues["damperLF_RAW"] = adcLF;
+                decodedValues["damperRF_RAW"] = adcRF;
+
                 return { timestamp, canId: canIdStr, ...decodedValues };
             }
 
-            if (canIdInt === 0x0701 && buffer.byteLength >= 4) { // REAR_ANALOG
-                decodedValues["damperLR"] = buffer.getUint16(0, false);
-                decodedValues["damperRR"] = buffer.getUint16(2, false);
+            if (canIdInt === 0x0701 && buffer.byteLength >= 6) { // REAR_ANALOG
+                const adcLR = buffer.getUint16(0, false);
+                const adcRR = buffer.getUint16(2, false);
+                const adcBrk = buffer.getUint16(4, false);
+
+                decodedValues["damperLR"] = Number((
+                    (-7.430249176415e-15) * Math.pow(adcLR, 4) + 
+                    (7.651688555578e-11) * Math.pow(adcLR, 3) + 
+                    (-2.495514301462e-07) * Math.pow(adcLR, 2) + 
+                    (-1.529198785943e-03) * adcLR + 
+                    7.301809527430
+                ).toFixed(6));
+
+                decodedValues["damperRR"] = Number((
+                    (-7.430249176415e-15) * Math.pow(adcRR, 4) + 
+                    (7.651688555578e-11) * Math.pow(adcRR, 3) + 
+                    (-2.495514301462e-07) * Math.pow(adcRR, 2) + 
+                    (-1.529198785943e-03) * adcRR + 
+                    7.301809527430
+                ).toFixed(6));
+
+                decodedValues["brakePressure"] = adcBrk;
+                decodedValues["damperLR_RAW"] = adcLR;
+                decodedValues["damperRR_RAW"] = adcRR;
+
                 return { timestamp, canId: canIdStr, ...decodedValues };
             }
 
@@ -483,12 +527,12 @@ export class CANDecoderLive {
         return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-      hexToDataView(hex: string): DataView {
-        // Fast, allocation-light hex decoding (avoids regex and slice)
-        const hexLen = hex.length;
+    hexToDataView(hex: string): DataView {
+        const cleanHex = hex.replace(/[^0-9A-Fa-f]/g, '');
+        const hexLen = cleanHex.length;
         const bytes = new Uint8Array(hexLen / 2);
         for (let i = 0, j = 0; i < hexLen; i += 2, j++) {
-            bytes[j] = parseInt(hex.substring(i, i + 2), 16);
+            bytes[j] = parseInt(cleanHex.substring(i, i + 2), 16);
         }
         return new DataView(bytes.buffer);
     }

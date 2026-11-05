@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { FolderIcon, ChevronLeftIcon, ChevronRightIcon } from "@heroicons/react/20/solid";
+import { FolderIcon, ChevronLeftIcon, ChevronRightIcon, TrashIcon } from "@heroicons/react/20/solid";
 import logo from "../assets/tuiasilogo.png";
 import FileActionModal from "./FileActionModal";
+import { api } from "../services/api";
 
 function OfflineFiles() {
     const location = useLocation();
@@ -52,6 +53,23 @@ function OfflineFiles() {
         setIsActionModalOpen(true);
     };
 
+    const handleDeleteSession = async (e, sessionId) => {
+        e.stopPropagation();
+        if (!window.confirm("Are you sure you want to delete this log?")) return;
+        try {
+            await api.deleteSession(sessionId);
+            setSessionWithTracks((prev) => {
+                const updated = prev.filter((s) => s.id !== sessionId);
+                const newTotalPages = Math.max(1, Math.ceil(updated.length / itemsPerPage));
+                if (currentPage > newTotalPages) setCurrentPage(newTotalPages);
+                return updated;
+            });
+        } catch (err) {
+            console.error("Failed to delete session:", err);
+        }
+    };
+
+
     // Optional: Handler for when decoding finishes (e.g. to refresh UI)
     const handleSuccess = () => {
         console.log("File processing complete.");
@@ -86,6 +104,13 @@ function OfflineFiles() {
                                             {session.date + ' ' + session.time}
                                         </p>
                                     </div>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => handleDeleteSession(e, session.id)}
+                                        className="mr-3 rounded-full p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                    >
+                                        <TrashIcon aria-hidden="true" className="size-5" />
+                                    </button>
                                 </div>
                             </li>
                         ))}

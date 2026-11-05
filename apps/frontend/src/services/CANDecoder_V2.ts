@@ -252,10 +252,10 @@ interface SignalConfig {
 
 // --- V2 DATABASE (Mapped precisely to your Spreadsheet) ---
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
-    // FRONT_ANALOG (uint16, Big Endian)
+     // FRONT_ANALOG (uint16, Big Endian)
     "0500": [
-        { name: "damperLF",      offset: 0, size: 2, filter: true }, // D1
-        { name: "damperRF",      offset: 2, size: 2, filter: true }, // D2
+        { name: "damperLF",      offset: 0, size: 2, method: "Convert_Damper", filter: true }, // D1
+        { name: "damperRF",      offset: 2, size: 2, method: "Convert_Damper", filter: true }, // D2
         { name: "steering",      offset: 4, size: 2, filter: true }  // STR
     ],
     
@@ -279,10 +279,10 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "gear",          offset: 0, size: 1, method: "Method_Gear" }
     ],
 
-    // REAR_ANALOG (uint16, Big Endian)
+     // REAR_ANALOG (uint16, Big Endian)
     "0701": [
-        { name: "damperLR",      offset: 0, size: 2, filter: true }, // RL
-        { name: "damperRR",      offset: 2, size: 2, filter: true }, // RR
+        { name: "damperLR",      offset: 0, size: 2, method: "Convert_Damper", filter: true }, // RL
+        { name: "damperRR",      offset: 2, size: 2, method: "Convert_Damper", filter: true }, // RR
         { name: "brakePressure", offset: 4, size: 2, filter: true }  // BRK
     ],
 
@@ -455,6 +455,29 @@ export class CANDecoderV2 {
                             // 4. Map the filtered signal to the standard variable
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
                             continue;
+                        case "Convert_Damper":
+                            const adc = rawVal;
+                            
+                            // Apply the polynomial formula
+                            let distance = (-7.430249176415e-15) * Math.pow(adc, 4) 
+                                         + (7.651688555578e-11) * Math.pow(adc, 3) 
+                                         + (-2.495514301462e-07) * Math.pow(adc, 2) 
+                                         + (-1.529198785943e-03) * adc 
+                                         + 7.301809527430;
+
+                            // Save the raw ADC value just in case you want to view it later
+                            decodedValues[sig.name + "_RAW"] = adc; 
+                            
+                            finalVal = distance;
+                            
+                            // Apply Kalman Filter to smooth the calculated distance (if enabled)
+                            // if (sig.filter) {
+                                
+                            // }
+                            
+                            // Map the final smoothed distance to the standard variable
+                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                            continue;
                     }
                 } 
                 
@@ -463,6 +486,11 @@ export class CANDecoderV2 {
                     const div = sig.divide ?? 1;
                     const add = sig.add ?? 0;
                     finalVal = (finalVal * mult / div) + add;
+                    
+                    if (sig.filter && sig.method !== "Method_IMU_Acc" && sig.method !== "Method_IMU_Gyro") {
+                        finalVal = this.applyKalman(sig.name, finalVal, timestamp);
+                    }
+                    
                     
                     decodedValues[sig.name] = Number(finalVal.toFixed(6));
                 }
@@ -611,7 +639,7 @@ export class CANDecoderV2 {
     }
 
     hexToDataView(hex: string): DataView {
-        hex = hex.replace(/\s+/g, '');
+        hex = hex.replace(/[\s;]+/g, '');
         
         if (/[^0-9A-Fa-f]/.test(hex)) {
             throw new Error("Invalid hex characters in payload");

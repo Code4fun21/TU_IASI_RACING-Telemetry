@@ -213,7 +213,7 @@ useEffect(() => {
                 "RPM": "rpm", "Throttle_position": "throttlePosition", "Battery_voltage": "batteryVoltage",
                 "Coolant_temperature": "coolantTemp", "Manifold_air_pressure": "manifoldAirPressure",
                 "Manifold_air_temperature": "manifoldAirTemp", "GPS_Latitude": "GPS_Latitude",
-                "GPS_Longitude": "GPS_Longitude", "GPS_Speed": "GPS_Speed", "ECU_time": "timestamp",
+                "GPS_Longitude": "GPS_Longitude", "GPS_Speed": "GPS_Speed", "ECU_time": "ECU_time",
                 
                 "Gyroscope_on_X_axis": "gyroX", "Gyroscope_on_Y_axis": "gyroY", "Gyroscope_on_Z_axis": "gyroZ",
                 

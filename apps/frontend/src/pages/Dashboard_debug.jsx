@@ -13,8 +13,8 @@ const SIGNAL_SPECS = [
     ["Gear", "Gear", "-"], ["Brake Pressure", "Brake_Pressure", "Bar"], ["Steering Angle", "Steering_Angle", "deg"],
     ["BSPD", "BSPD", "-"],
    
-    ["Damper FL", "Damper_Left_Front", "mm"], ["Damper FR", "Damper_Right_Front", "mm"],
-    ["Damper RL", "Damper_Left_Rear", "mm"], ["Damper RR", "Damper_Right_Rear", "mm"],
+     ["Damper FL", "Damper_Left_Front", "cm"], ["Damper FR", "Damper_Right_Front", "cm"],
+        ["Damper RL", "Damper_Left_Rear", "cm"], ["Damper RR", "Damper_Right_Rear", "cm"],
     ["Air Density Corr.", "Air_density_correction", "%"], ["Warmup Corr.", "Warmup_correction", "%"],
     ["TPS Accel", "TPS_based_acceleration", "%"], ["TPS Fuel Cut", "TPS_based_fuel_cut", "%"],
     ["Total Fuel Corr.", "Total_fuel_correction", "%"], ["Cold Advance", "Cold_advance", "deg"],

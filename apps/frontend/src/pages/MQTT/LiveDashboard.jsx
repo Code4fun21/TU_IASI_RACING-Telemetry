@@ -6,6 +6,7 @@ import { api } from "../../services/api";
 import { transformToColumnar } from "../../services/DataTransformer";
 import { useRef } from "react";
 
+
 // Components
 import MapChart from "../../components/MapChart"; 
 import LapTimesPanel from "../MQTT/MoreCharts/Charts/LapTimesPanel"; 
@@ -208,26 +209,54 @@ export default function LiveDashboard() {
     return lineDataGPS.GPS_Speed[lineDataGPS.GPS_Speed.length - 1] ?? 0;
   }, [lineDataGPS]);
 
-  const latestDamperLF = useMemo(() => {
-    if (!lineDataDamper.damperLF || lineDataDamper.damperLF.length === 0) return 0;
-    return lineDataDamper.damperLF[lineDataDamper.damperLF.length - 1] ?? 0;
-  }, [lineDataDamper]);
+  
+// --- THROTTLED DAMPER STATE & PERSISTENCE ---
+const [displayedDampers, setDisplayedDampers] = useState({
+    LF: 0,
+    RF: 0,
+    LR: 0,
+    RR: 0
+});
 
-  const latestDamperRF = useMemo(() => {
-    if (!lineDataDamper.damperRF || lineDataDamper.damperRF.length === 0) return 0;
-    return lineDataDamper.damperRF[lineDataDamper.damperRF.length - 1] ?? 0;
-  }, [lineDataDamper]);
+// Keep track of the last known non-zero/valid damper values so they never drop to 0
+const lastValidDampers = useRef({ LF: 0, RF: 0, LR: 0, RR: 0 });
 
-  const latestDamperLR = useMemo(() => {
+useEffect(() => {
+    const interval = setInterval(() => {
+        if (!decodedBuffer || decodedBuffer.length === 0) return;
 
-    if (!lineDataDamper.damperLR || lineDataDamper.damperLR.length === 0) return 0;
-    return lineDataDamper.damperLR[lineDataDamper.damperLR.length - 1] ?? 0;
-  }, [lineDataDamper]);
+        // Scan backwards through the buffer to find the latest valid values for each damper key
+        const findLatestVal = (key) => {
+            for (let i = decodedBuffer.length - 1; i >= 0; i--) {
+                const packet = decodedBuffer[i];
+                if (packet && packet[key] !== undefined && packet[key] !== null) {
+                    return packet[key];
+                }
+            }
+            return null;
+        };
 
-  const latestDamperRR = useMemo(() => {
-    if (!lineDataDamper.damperRR || lineDataDamper.damperRR.length === 0) return 0;
-    return lineDataDamper.damperRR[lineDataDamper.damperRR.length - 1] ?? 0;
-  }, [lineDataDamper]);
+        const lf = findLatestVal("damperLF");
+        const rf = findLatestVal("damperRF");
+        const lr = findLatestVal("damperLR");
+        const rr = findLatestVal("damperRR");
+
+        if (lf !== null) lastValidDampers.current.LF = lf;
+        if (rf !== null) lastValidDampers.current.RF = rf;
+        if (lr !== null) lastValidDampers.current.LR = lr;
+        if (rr !== null) lastValidDampers.current.RR = rr;
+
+        setDisplayedDampers({
+            LF: lastValidDampers.current.LF,
+            RF: lastValidDampers.current.RF,
+            LR: lastValidDampers.current.LR,
+            RR: lastValidDampers.current.RR,
+        });
+    }, 100); // Throttled to update every 100ms (10fps), preventing canvas choking
+
+    return () => clearInterval(interval);
+}, [decodedBuffer]);
+
 
   // --- UI HANDLERS FOR CUSTOM CHART ---
   const handleAddSignal = (e) => {
@@ -400,28 +429,26 @@ export default function LiveDashboard() {
 
          {/* --- DAMPER / SUSPENSION SECTION --- */}
         <div className="flex flex-row justify-center items-center gap-8 p-4 bg-gray-900 rounded shadow-md mt-4">
-            
-            <div className="flex flex-col items-center">
-                <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>
-                <FrontDamperChart 
-                    leftData={latestDamperLF} 
-                    rightData={latestDamperRF} 
-                    width={150} 
-                    height={200} 
-                />
-            </div>
+    <div className="flex flex-col items-center">
+        <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>
+        <FrontDamperChart 
+            leftData={displayedDampers.LF} 
+            rightData={displayedDampers.RF} 
+            width={150} 
+            height={200} 
+        />
+    </div>
 
-            <div className="flex flex-col items-center">
-                <h3 className="text-white text-sm font-bold mb-2">REAR DAMPERS</h3>
-                <RearDamperChart 
-                    leftData={latestDamperLR} 
-                    rightData={latestDamperRR} 
-                    width={150} 
-                    height={200} 
-                />
-            </div>
-
-        </div>
+    <div className="flex flex-col items-center">
+        <h3 className="text-white text-sm font-bold mb-2">REAR DAMPERS</h3>
+        <RearDamperChart 
+            leftData={displayedDampers.LR} 
+            rightData={displayedDampers.RR} 
+            width={150} 
+            height={200} 
+        />
+    </div>
+</div>
 
         {/* Live Map + Lap Times Panel */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">

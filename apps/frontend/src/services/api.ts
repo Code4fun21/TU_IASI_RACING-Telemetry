@@ -57,11 +57,14 @@ export const api = {
     const response = await axios.get<Session[]>(`${API_URL}/sessions`);
     return response.data;
   },
-   getSessionById: async(sessionId: number)=>{
-    const response = await axios.get<Session>(`${API_URL}/sessions/${sessionId}`,);
+  getSessionById: async(sessionId: number)=>{
+      const response = await axios.get<Session>(`${API_URL}/sessions/${sessionId}`,);
+      return response.data;
+  },
+  deleteSession: async (sessionId: number) => {
+    const response = await axios.delete(`${API_URL}/sessions/${sessionId}`);
     return response.data;
   },
-
 
 // --- TRACKS ---
   getTrackById: async(trackId: number)=>{
