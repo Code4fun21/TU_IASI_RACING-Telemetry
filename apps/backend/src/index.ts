@@ -113,6 +113,15 @@ app.post('/api/sessions',
   }
 );
 
+app.delete('/api/sessions/:id', 
+  usageGuardMiddleware('d1_writes'), // <--- Protect write/delete operations
+  async (c) => {
+    const id = c.req.param('id');
+    await c.env.DB.prepare('DELETE FROM Session WHERE id = ?').bind(id).run();
+    return c.json({ success: true });
+  }
+);
+
 // 2. DRIVERS
 app.get('/api/drivers', usageGuardMiddleware('d1_reads'), async (c) => {
   const { results } = await c.env.DB.prepare('SELECT * FROM Driver').all();
