@@ -177,6 +177,19 @@ export default function Dashboard() {
     const [pick, setPick] = useState("");
     const [committed, setCommitted] = useState([]);
 
+    // --- DRIVER MAPPING FOR UI ---
+    const [driversMap, setDriversMap] = useState({});
+
+    useEffect(() => {
+        api.getDrivers()
+            .then(data => {
+                const map = {};
+                if (data) data.forEach(d => map[d.id] = d.name);
+                setDriversMap(map);
+            })
+            .catch(err => console.error("Error fetching drivers:", err));
+    }, []);
+
 
     // Safety Check
     useEffect(() => {
@@ -691,13 +704,30 @@ const speedVsDistance = useMemo(() => {
             <div className="rounded-lg bg-white p-4 shadow space-y-2">
                 <h3 className="font-medium text-gray-700">Choose Timestamp</h3>
                 <TimestampSelect 
-                    sessionId={activeSessionId} // <--- Updated to use activeSessionId
+                    sessionId={activeSessionId} 
                     onSelect={(ts) => {
                         setSelectedTs(ts);
-                        setSelectedLap(null);
+                        setSelectedLap(null); // Auto-reset lap selection when changing stint
                     }} 
                 />
-
+                
+                {/* NEW: Driver & Stint Details Panel */}
+                {selectedTs && (
+                    <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200 text-sm space-y-1">
+                        <div className="flex justify-between">
+                            <span className="text-gray-500">Driver:</span>
+                            <span className="font-medium text-indigo-700">
+                                {driversMap[selectedTs.driverId] || (selectedTs.driverId ? `ID: ${selectedTs.driverId}` : "No driver linked")}
+                            </span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-gray-500">Stint Time:</span>
+                            <span className="font-medium text-gray-900">
+                                {((selectedTs.endTime - selectedTs.startTime) / 1000).toFixed(1)}s
+                            </span>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Lap selector */}
