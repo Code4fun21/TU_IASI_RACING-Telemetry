@@ -279,11 +279,11 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
         { name: "gear",          offset: 0, size: 1, method: "Method_Gear" }
     ],
 
-     // REAR_ANALOG (uint16, Big Endian)
+    // REAR_ANALOG (uint16, Big Endian)
     "0701": [
         { name: "damperLR",      offset: 0, size: 2, method: "Convert_Damper", filter: true }, // RL
         { name: "damperRR",      offset: 2, size: 2, method: "Convert_Damper", filter: true }, // RR
-        { name: "brakePressure", offset: 4, size: 2, filter: true }  // BRK
+        { name: "brakePressure", offset: 4, size: 2, method: "Convert_Brake", filter: true }  // BRK
     ],
 
     // GPS_POS (float32, Little Endian directly from memcpy)
@@ -470,13 +470,32 @@ export class CANDecoderV2 {
                             
                             finalVal = distance;
                             
-                            // Apply Kalman Filter to smooth the calculated distance (if enabled)
-                            // if (sig.filter) {
-                                
-                            // }
-                            
                             // Map the final smoothed distance to the standard variable
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                            continue;
+
+                        case "Convert_Brake":
+                            const adcBrk = rawVal;
+                            
+                            // 1. Enter your recorded ADC values here:
+                            const ADC_REST = 500;  // Example: Replace with actual resting baseline
+                            const ADC_MAX = 3500;  // Example: Replace with actual max braking average
+                            
+                            // 2. Calculate constants
+                            const ADC_ZERO = ADC_REST + 20; 
+                            const m = 100.0 / (ADC_MAX - ADC_ZERO);
+                            const c = -m * ADC_ZERO;
+                            
+                            // 3. Evaluate and clamp
+                            let brakePercent = (m * adcBrk) + c;
+                            brakePercent = Math.max(0, Math.min(100, brakePercent)); // Clamp 0-100
+                            
+                            // 4. Save raw and final values
+                            decodedValues[sig.name + "_RAW"] = adcBrk; 
+                            finalVal = brakePercent;
+                            
+                            // (Optional) Kalman filter will apply automatically below if sig.filter is true
+                            decodedValues[sig.name] = Number(finalVal.toFixed(2));
                             continue;
                     }
                 } 

@@ -67,16 +67,22 @@ export const MqttService = {
         MqttService.client.on('message', (topic, payload) => {
             if (topic === config.topic) {
                 try {
-                    const rawString = payload.toString(); 
+                    const rawPayload = payload.toString();
+                    const frames = rawPayload.split(/[;\n\r]+/);
                     
-                    // FIX 2: Use the instance method .parse()
-                    
-                    const decodedObject = decoder.parse(rawString);
-                    
-                    // Only add if successfully decoded (not null)
-                    // If you want to keep raw strings even if decode fails, remove the check.
-                    // But usually, we want paired data.
-                    useMqttStore.getState().addMessage(rawString, decodedObject);
+                    for (const frame of frames) {
+                        const rawString = frame.trim();
+                        if (!rawString) continue;
+
+                        // FIX 2: Use the instance method .parse()
+                        
+                        const decodedObject = decoder.parse(rawString);
+                        
+                        // Only add if successfully decoded (not null)
+                        // If you want to keep raw strings even if decode fails, remove the check.
+                        // But usually, we want paired data.
+                        useMqttStore.getState().addMessage(rawString, decodedObject);
+                    }
                     
                 } catch (e) {
                     console.error("Msg Error:", e);

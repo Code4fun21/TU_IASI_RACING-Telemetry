@@ -6,7 +6,6 @@ import { api } from "../../services/api";
 import { transformToColumnar } from "../../services/DataTransformer";
 import { useRef } from "react";
 
-
 // Components
 import MapChart from "../../components/MapChart"; 
 import LapTimesPanel from "../MQTT/MoreCharts/Charts/LapTimesPanel"; 
@@ -24,6 +23,13 @@ const MAX_DATA_POINTS = 200;
 const ENGINE_SIGNALS = ["rpm", "gear", "throttlePosition", "brakePressure"];
 const VITAL_SIGNALS = ["batteryVoltage", "coolantTemp", "manifoldAirPressure"];
 const DAMPER_KEYS = ["damperLF", "damperRF", "damperLR", "damperRR"];
+const ECU_SIGNALS = [
+    "manifoldAirTemp", "airDensityCorrection", "warmupCorrection",
+    "tpsBasedAcceleration", "tpsBasedFuelCut", "totalfuelCorrection",
+    "veValueTableBank1", "veValueTableBank2", "coldAdvance",
+    "rateOfchangeOfTPS", "rateOfChangeOfRPM", "syncLossCounter",
+    "syncLossReasonCode", "averageFuelFlow"
+];
 
 // Re-added Lat and Lon for debugging data flow
 const GPS_KEYS = ["GPS_Speed", "GPS_Latitude", "GPS_Longitude"];
@@ -32,8 +38,9 @@ const GPS_KEYS = ["GPS_Speed", "GPS_Latitude", "GPS_Longitude"];
 const ALL_SIGNALS = [
     ...ENGINE_SIGNALS,
     ...VITAL_SIGNALS,
+    ...ECU_SIGNALS,
     "GPS_Speed", "GPS_Latitude", "GPS_Longitude", // Explicitly added for custom charts
-    "manifoldAirTemp", "oilPressure", "fuelLevel", "steeringAngle",
+    "oilPressure", "fuelLevel", "steeringAngle",
     "damperLF", "damperRF", "damperLR", "damperRR",
     "accelerationX", "accelerationY", "accelerationZ",
     "gyroX", "gyroY", "gyroZ"
@@ -64,6 +71,7 @@ export default function LiveDashboard() {
 
   const [isReceiving, setIsReceiving] = useState(false);
   const receiveTimeout = useRef(null);
+  const lastKnownRef = useRef({});
   
   // Watch for buffer changes to trigger the "receiving" indicator
   useEffect(() => {
@@ -150,16 +158,17 @@ export default function LiveDashboard() {
     const timestamps = recentBuffer.map(d => formatTime(d.timestamp));
     const result = { timestamps };
     
-    const lastKnown = {}; 
+    const lastKnown = { ...lastKnownRef.current }; 
     
     // Step A: Historical Lookback. Find the true last known value BEFORE the 200-point slice begins.
     // This prevents the chart from starting with `null` if the GPS packet is slow.
     signalKeys.forEach(key => {
         for (let i = sliceStartIndex - 1; i >= 0; i--) {
             const val = buffer[i][key];
-            if (val !== undefined && val !== null) {
+            if (val !== undefined && val !== null && !Number.isNaN(val)) {
                 if (!validator || validator(val, key)) {
                     lastKnown[key] = val;
+                    lastKnownRef.current[key] = val;
                     break; // Found it, stop searching backwards
                 }
             }
@@ -170,11 +179,12 @@ export default function LiveDashboard() {
     signalKeys.forEach(key => {
         result[key] = recentBuffer.map(d => {
             const val = d[key];
-            let isValid = val !== undefined && val !== null;
+            let isValid = val !== undefined && val !== null && !Number.isNaN(val);
             if (isValid && validator) isValid = validator(val, key);
 
             if (isValid) {
                 lastKnown[key] = val;
+                lastKnownRef.current[key] = val;
                 return val;
             }
             return lastKnown[key] ?? null; 
@@ -187,6 +197,7 @@ export default function LiveDashboard() {
   const lineDataVital = useMemo(() => processDataWithHold(decodedBuffer, VITAL_SIGNALS), [decodedBuffer]);
   const lineDataGPS = useMemo(() => processDataWithHold(decodedBuffer, GPS_KEYS), [decodedBuffer]);
   const lineDataDamper = useMemo(() => processDataWithHold(decodedBuffer, DAMPER_KEYS), [decodedBuffer]);
+  const lineDataECU = useMemo(() => processDataWithHold(decodedBuffer, ECU_SIGNALS), [decodedBuffer]);
 
   const lineDataCustom = useMemo(() => {
     if (committed.length === 0) return null;
@@ -223,13 +234,14 @@ const lastValidDampers = useRef({ LF: 0, RF: 0, LR: 0, RR: 0 });
 
 useEffect(() => {
     const interval = setInterval(() => {
-        if (!decodedBuffer || decodedBuffer.length === 0) return;
+        const currentBuffer = useMqttStore.getState().decodedBuffer;
+        if (!currentBuffer || currentBuffer.length === 0) return;
 
         // Scan backwards through the buffer to find the latest valid values for each damper key
         const findLatestVal = (key) => {
-            for (let i = decodedBuffer.length - 1; i >= 0; i--) {
-                const packet = decodedBuffer[i];
-                if (packet && packet[key] !== undefined && packet[key] !== null) {
+            for (let i = currentBuffer.length - 1; i >= 0; i--) {
+                const packet = currentBuffer[i];
+                if (packet && packet[key] !== undefined && packet[key] !== null && !Number.isNaN(packet[key])) {
                     return packet[key];
                 }
             }
@@ -255,7 +267,7 @@ useEffect(() => {
     }, 100); // Throttled to update every 100ms (10fps), preventing canvas choking
 
     return () => clearInterval(interval);
-}, [decodedBuffer]);
+}, []);
 
 
   // --- UI HANDLERS FOR CUSTOM CHART ---
@@ -416,6 +428,11 @@ useEffect(() => {
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Live Telemetry</h3>
             {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataVital} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
         </div>
+
+        <div className="bg-white p-6 rounded-lg shadow">
+            <h3 className="text-lg font-medium text-gray-900 text-center mb-4">ECU Signals</h3>
+            {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataECU} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
+        </div>
         
         {/* GPS Chart */}
         <div className="bg-white p-6 rounded-lg shadow">
@@ -428,6 +445,10 @@ useEffect(() => {
         </div>
 
          {/* --- DAMPER / SUSPENSION SECTION --- */}
+        <div className="bg-white p-6 rounded-lg shadow">
+            {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataDamper} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
+        </div>
+
         <div className="flex flex-row justify-center items-center gap-8 p-4 bg-gray-900 rounded shadow-md mt-4">
     <div className="flex flex-col items-center">
         <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>

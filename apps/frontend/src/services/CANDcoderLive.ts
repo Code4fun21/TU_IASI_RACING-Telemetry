@@ -196,44 +196,35 @@ export class CANDecoderLive {
     justS0: boolean = false;
     lapCount: number = 0;
 
+    // 🚀 THE FIX: State Cache to bridge frequency gaps
+    latestState: Record<string, any> = {}; 
+
     constructor() {
         this.mainCoords = [0, 0];
     }
 
     async setBaseCoordinates(trackData: any) {
-        if (!trackData) {
-            return;
-        }
-
+        if (!trackData) return;
         if (trackData.gates && typeof trackData.gates === 'object') {
             this.initializeGates(trackData.gates);
-        } 
-        else if (typeof trackData.gates === 'string') {
+        } else if (typeof trackData.gates === 'string') {
             try {
                 const data = await api.fetchJsonFile(trackData.gates);
                 this.initializeGates(data);
-            } catch (err) {
-            }
+            } catch (err) {}
         }
     }
 
     initializeGates(data: any) {
-        if (!Array.isArray(data) || data.length === 0) {
-            return;
-        }
-
+        if (!Array.isArray(data) || data.length === 0) return;
         const lat = Math.floor(Number(data[0].lat1)); 
         const lon = Math.floor(Number(data[0].lon1));
-
         this.mainCoords = [lat, lon];
         this.gateCheckers = {};
-
         data.forEach((g: any) => {
             if (g.lat1 == null || g.lon1 == null || g.lat2 == null || g.lon2 == null) return;
-
             const gL = new GPSPoint(Number(g.lat1), Number(g.lon1), 0, 0);
             const gR = new GPSPoint(Number(g.lat2), Number(g.lon2), 0, 0);
-            
             const gateName = g.name || `Gate_${Math.random().toString(36).substr(2, 5)}`;
             this.gateCheckers[gateName] = new GPS_Intersection(gL, gR);
         });
@@ -245,65 +236,27 @@ export class CANDecoderLive {
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
-            const canIdStr = parts[1].trim();
-            // Fast integer parsing for ID instead of string matching
-            const canIdInt = parseInt(canIdStr, 16); 
             
-            const payloadHex = parts[2].trim();
+            const canIdStr = parts[1].trim();
+            const cleanIdStr = canIdStr.replace(/^0x/i, '').replace(/[^0-9A-Fa-f]/g, '');
+            const canIdInt = parseInt(cleanIdStr, 16); 
+            
+            const payloadHex = parts[2].trim().replace(/[^0-9A-Fa-f]/g, '');
             const buffer = this.hexToDataView(payloadHex);
             const decodedValues: Record<string, any> = {};
 
-            // 🚀 FAST PATH FOR HIGH FREQUENCY DATA (Inspired by the Python script)
-            if (canIdInt === 0x0501 && buffer.byteLength >= 6) { // ACCEL
-                decodedValues["accelerationX"] = buffer.getInt16(0, false) / 100.0;
-                decodedValues["accelerationY"] = buffer.getInt16(2, false) / 100.0;
-                decodedValues["accelerationZ"] = buffer.getInt16(4, false) / 100.0;
-                decodedValues["accelerationX_RAW"] = decodedValues["accelerationX"];
-                decodedValues["accelerationY_RAW"] = decodedValues["accelerationY"];
-                decodedValues["accelerationZ_RAW"] = decodedValues["accelerationZ"];
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-            if (canIdInt === 0x0502 && buffer.byteLength >= 6) { // GYRO
-                decodedValues["gyroX"] = buffer.getInt16(0, false) / 100.0;
-                decodedValues["gyroY"] = buffer.getInt16(2, false) / 100.0;
-                decodedValues["gyroZ"] = buffer.getInt16(4, false) / 100.0;
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-            if (canIdInt === 0x0700 && buffer.byteLength >= 1) { // GEAR
-                const gear = buffer.getUint8(0);
-                decodedValues["gear"] = gear === 0 ? "N" : gear.toString();
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-            if (canIdInt === 0x0800 && buffer.byteLength >= 8) { // GPS POS
-                const lat = buffer.getFloat32(0, true);
-                const lon = buffer.getFloat32(4, true);
-                decodedValues["GPS_Latitude"] = lat;
-                decodedValues["GPS_Longitude"] = lon;
-                
-                // Track state
-                const speed = this.currPos ? this.currPos.speed : 0;
-                this.currPos = new GPSPoint(lat, lon, timestamp, speed);
-                if (this.prevPos) this.checkCross(timestamp, this.currPos);
-                this.prevPos = this.currPos;
-                decodedValues["Distance"] = this.trackLen;
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-            if (canIdInt === 0x0801 && buffer.byteLength >= 4) { // GPS SPD
-                const spd = buffer.getFloat32(0, true);
-                decodedValues["GPS_Speed"] = spd; // Note: if you want km/h * 1.852 here
-                if (this.currPos) this.currPos.speed = spd;
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-            if (canIdInt === 0x0900 && buffer.byteLength >= 4) { // LAP
-                decodedValues["LAP_MS"] = buffer.getUint32(0, false);
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-           if (canIdInt === 0x0500 && buffer.byteLength >= 6) { // FRONT_ANALOG
-                const adcLF = buffer.getUint16(0, false);
-                const adcRF = buffer.getUint16(2, false);
-                const adcStr = buffer.getUint16(4, false);
+           if (canIdInt === 0x0500) { 
+                const adcLF = buffer.byteLength >= 2 ? buffer.getUint16(0, false) : 0;
+                const adcRF = buffer.byteLength >= 4 ? buffer.getUint16(2, false) : 0;
+                const adcStr = buffer.byteLength >= 6 ? buffer.getUint16(4, false) : 0;
 
-                // Polynomial conversion for Dampers
+                decodedValues["damperLF_RAW"] = adcLF;
+                decodedValues["damperRF_RAW"] = adcRF;
+                
+                if (buffer.byteLength >= 6) {
+                    decodedValues["steering"] = adcStr;
+                }
+
                 decodedValues["damperLF"] = Number((
                     (-7.430249176415e-15) * Math.pow(adcLF, 4) + 
                     (7.651688555578e-11) * Math.pow(adcLF, 3) + 
@@ -320,17 +273,18 @@ export class CANDecoderLive {
                     7.301809527430
                 ).toFixed(6));
 
-                decodedValues["steering"] = adcStr;
-                decodedValues["damperLF_RAW"] = adcLF;
-                decodedValues["damperRF_RAW"] = adcRF;
-
-                return { timestamp, canId: canIdStr, ...decodedValues };
+                Object.assign(this.latestState, decodedValues);
+                return { timestamp, canId: cleanIdStr, ...this.latestState };
             }
 
-            if (canIdInt === 0x0701 && buffer.byteLength >= 6) { // REAR_ANALOG
-                const adcLR = buffer.getUint16(0, false);
-                const adcRR = buffer.getUint16(2, false);
-                const adcBrk = buffer.getUint16(4, false);
+            else if (canIdInt === 0x0701) { 
+                const adcLR = buffer.byteLength >= 2 ? buffer.getUint16(0, false) : 0;
+                const adcRR = buffer.byteLength >= 4 ? buffer.getUint16(2, false) : 0;
+                const adcBrk = buffer.byteLength >= 6 ? buffer.getUint16(4, false) : 0;
+
+                decodedValues["damperLR_RAW"] = adcLR;
+                decodedValues["damperRR_RAW"] = adcRR;
+                decodedValues["brakePressure_RAW"] = adcBrk;
 
                 decodedValues["damperLR"] = Number((
                     (-7.430249176415e-15) * Math.pow(adcLR, 4) + 
@@ -348,91 +302,117 @@ export class CANDecoderLive {
                     7.301809527430
                 ).toFixed(6));
 
-                decodedValues["brakePressure"] = adcBrk;
-                decodedValues["damperLR_RAW"] = adcLR;
-                decodedValues["damperRR_RAW"] = adcRR;
-
-                return { timestamp, canId: canIdStr, ...decodedValues };
-            }
-
-            // FALLBACK TO DYNAMIC DATABASE PARSER
-            let canId = canIdStr.replace(/^0x/i, '').toUpperCase();
-            if (canId.length < 4) canId = canId.padStart(4, "0");
-            const signals = CAN_DATABASE[canId];
-
-            if (!signals) return null;
-
-
-
-
-            
-            for (const sig of signals) {
-                let finalVal = 0;
-                let rawVal = 0;
-
-                if (sig.method === "Float32_LE") {
-                    finalVal = buffer.getFloat32(sig.offset, true); 
-                    rawVal = finalVal;
-                } else {
-                    rawVal = this.readBytes(buffer, sig.offset, sig.size, sig.isSigned);
-                    finalVal = rawVal;
-                }
-
-                if (sig.method && sig.method !== "Float32_LE") {
-                    switch (sig.method) {
-                        case "Convert_Temp":
-                            const tempInF = rawVal / (sig.divide || 1); 
-                            finalVal = (tempInF - 32) * 5 / 9;
-                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
-                            continue;
-
-                        case "Method_Gear":
-                            decodedValues[sig.name] = rawVal === 0 ? "N" : rawVal.toString();
-                            continue;
-
-                        case "Method_IMU_Acc":
-                            finalVal = rawVal / (sig.divide || 100.0); 
-                            decodedValues[sig.name + "_RAW"] = Number(finalVal);
-                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
-                            continue; 
-                    }
-                } 
-                
-                if (sig.method !== "Method_Gear" && sig.method !== "Convert_Temp") {
-                    const mult = sig.multiply ?? 1;
-                    const div = sig.divide ?? 1;
-                    const add = sig.add ?? 0;
-                    finalVal = (finalVal * mult / div) + add;
+                if (buffer.byteLength >= 6) {
+                    const ADC_REST = 250; 
+                    const ADC_MAX = 2000; 
+                    const m = 100.0 / (ADC_MAX - ADC_REST);
+                    const c = -m * ADC_REST;
                     
-                    decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                    let brakePercent = (m * adcBrk) + c;
+                    brakePercent = Math.max(0, Math.min(100, brakePercent)); 
+                    decodedValues["brakePressure"] = Number(brakePercent.toFixed(2));
+                } else {
+                    decodedValues["brakePressure"] = 0;
                 }
+
+                Object.assign(this.latestState, decodedValues);
+                return { timestamp, canId: cleanIdStr, ...this.latestState };
             }
 
-            if (decodedValues["GPS_Latitude"] && decodedValues["GPS_Longitude"]) {
-                const lat = decodedValues["GPS_Latitude"];
-                const lon = decodedValues["GPS_Longitude"];
-                const speed = decodedValues["GPS_Speed"] !== undefined ? decodedValues["GPS_Speed"] : (this.currPos ? this.currPos.speed : 0);
+            // 🚀 FAST PATH FOR HIGH FREQUENCY DATA
+            else if (canIdInt === 0x0501) { // ACCEL
+                decodedValues["accelerationX"] = (buffer.byteLength >= 2 ? buffer.getInt16(0, false) : 0) / 100.0;
+                decodedValues["accelerationY"] = (buffer.byteLength >= 4 ? buffer.getInt16(2, false) : 0) / 100.0;
+                decodedValues["accelerationZ"] = (buffer.byteLength >= 6 ? buffer.getInt16(4, false) : 0) / 100.0;
+                decodedValues["accelerationX_RAW"] = decodedValues["accelerationX"];
+                decodedValues["accelerationY_RAW"] = decodedValues["accelerationY"];
+                decodedValues["accelerationZ_RAW"] = decodedValues["accelerationZ"];
+            }
+            else if (canIdInt === 0x0502) { // GYRO
+                decodedValues["gyroX"] = (buffer.byteLength >= 2 ? buffer.getInt16(0, false) : 0) / 100.0;
+                decodedValues["gyroY"] = (buffer.byteLength >= 4 ? buffer.getInt16(2, false) : 0) / 100.0;
+                decodedValues["gyroZ"] = (buffer.byteLength >= 6 ? buffer.getInt16(4, false) : 0) / 100.0;
+            }
+            else if (canIdInt === 0x0700) { // GEAR
+                const gear = buffer.byteLength >= 1 ? buffer.getUint8(0) : 0;
+                decodedValues["gear"] = gear === 0 ? "N" : gear.toString();
+            }
+            else if (canIdInt === 0x0800) { // GPS POS
+                const lat = buffer.byteLength >= 4 ? buffer.getFloat32(0, true) : 0;
+                const lon = buffer.byteLength >= 8 ? buffer.getFloat32(4, true) : 0;
+                decodedValues["GPS_Latitude"] = lat;
+                decodedValues["GPS_Longitude"] = lon;
                 
+                const speed = this.currPos ? this.currPos.speed : 0;
                 this.currPos = new GPSPoint(lat, lon, timestamp, speed);
-                
-                if (this.prevPos) {
-                    this.checkCross(timestamp, this.currPos);
-                }
+                if (this.prevPos) this.checkCross(timestamp, this.currPos);
                 
                 this.prevPos = this.currPos;
-            } else if (decodedValues["GPS_Speed"] !== undefined && this.currPos) {
-                this.currPos.speed = decodedValues["GPS_Speed"];
+            }
+            else if (canIdInt === 0x0801) { // GPS SPD
+                const spd = buffer.byteLength >= 4 ? buffer.getFloat32(0, true) : 0;
+                decodedValues["GPS_Speed"] = spd;
+                if (this.currPos) this.currPos.speed = spd;
+            }
+            else if (canIdInt === 0x0900) { // LAP
+                decodedValues["LAP_MS"] = buffer.byteLength >= 4 ? buffer.getUint32(0, false) : 0;
+            }
+            else {
+                // FALLBACK TO DYNAMIC DATABASE PARSER
+                const formattedId = cleanIdStr.padStart(4, "0").toUpperCase();
+                const signals = CAN_DATABASE[formattedId];
+                if (signals) {
+                    for (const sig of signals) {
+                        let finalVal = 0;
+                        let rawVal = 0;
+
+                        if (sig.method === "Float32_LE") {
+                            finalVal = buffer.getFloat32(sig.offset, true); 
+                            rawVal = finalVal;
+                        } else {
+                            rawVal = this.readBytes(buffer, sig.offset, sig.size, sig.isSigned);
+                            finalVal = rawVal;
+                        }
+
+                        if (sig.method && sig.method !== "Float32_LE") {
+                            switch (sig.method) {
+                                case "Convert_Temp":
+                                    const tempInF = rawVal / (sig.divide || 1); 
+                                    finalVal = (tempInF - 32) * 5 / 9;
+                                    decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                                    continue;
+                                case "Method_Gear":
+                                    decodedValues[sig.name] = rawVal === 0 ? "N" : rawVal.toString();
+                                    continue;
+                                case "Method_IMU_Acc":
+                                    finalVal = rawVal / (sig.divide || 100.0); 
+                                    decodedValues[sig.name + "_RAW"] = Number(finalVal);
+                                    decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                                    continue; 
+                            }
+                        } 
+                        
+                        if (sig.method !== "Method_Gear" && sig.method !== "Convert_Temp") {
+                            const mult = sig.multiply ?? 1;
+                            const div = sig.divide ?? 1;
+                            const add = sig.add ?? 0;
+                            finalVal = (finalVal * mult / div) + add;
+                            decodedValues[sig.name] = Number(finalVal.toFixed(6));
+                        }
+                    }
+                }
             }
 
-            decodedValues["Distance"] = this.trackLen;
+            // 🚀 THE MAGIC TRICK: Inject all latest known values into every packet
+            Object.assign(this.latestState, decodedValues);
+            this.latestState.Distance = this.trackLen;
 
-            return { timestamp, canId, ...decodedValues };
+            return { timestamp, canId: cleanIdStr, ...this.latestState };
 
         } catch (e) {
             return null;
         }
     }
-
     checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
         const prev = this.prevPos;
