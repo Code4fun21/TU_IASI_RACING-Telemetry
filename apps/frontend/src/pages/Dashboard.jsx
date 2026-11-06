@@ -147,14 +147,20 @@ export default function Dashboard() {
 
     const { setTelemetryData, setSessionInfo, telemetryData, sessionInfo } = useTelemetry();
 
-    const { fileData, session: navSession } = location.state || {};
+    // Extract BOTH possible variables from the router
+    const { fileData, session: navSession, sessionId: navSessionId } = location.state || {};
 
-    // 2. Define Session: Use navigation session (new file) OR context session (old file)
+    // Find the true Session ID, regardless of how the router passed it
+    const activeSessionId = navSession?.id || navSessionId || sessionInfo?.id;
     const currentSession = navSession || sessionInfo;
 
-    
+    // Debug check: This will print the ID to your F12 console
+    useEffect(() => {
+        console.log("Router State:", location.state);
+        console.log("Resolved Session ID for Dropdown:", activeSessionId);
+    }, [location.state, activeSessionId]);
 
-const rawData = useMemo(() => {
+    const rawData = useMemo(() => {
         if (fileData && Array.isArray(fileData.rows)) return fileData.rows;
         if (Array.isArray(fileData)) return fileData;
         return [];
@@ -685,12 +691,13 @@ const speedVsDistance = useMemo(() => {
             <div className="rounded-lg bg-white p-4 shadow space-y-2">
                 <h3 className="font-medium text-gray-700">Choose Timestamp</h3>
                 <TimestampSelect 
-                    sessionId={currentSession?.id} 
+                    sessionId={activeSessionId} // <--- Updated to use activeSessionId
                     onSelect={(ts) => {
                         setSelectedTs(ts);
-                        setSelectedLap(null); // <--- Auto-reset lap selection when changing stint
+                        setSelectedLap(null);
                     }} 
                 />
+
             </div>
 
             {/* Lap selector */}

@@ -5,6 +5,7 @@ import { BsFillRecordCircleFill } from "react-icons/bs";
 import DriverSelect from "./DriverSelect";
 import MonopostSelect from "./MonopostSelect";
 import { api } from "../../../services/api";
+import { useMqttStore } from "../../../store/MqttStore"; // Imported to access live telemetry data
 
 export default function TopActionBar({ sessionId }) {
   
@@ -16,30 +17,38 @@ export default function TopActionBar({ sessionId }) {
   const [elapsed, setElapsed]         = useState(0); // milliseconds
   const timerRef = useRef(null);
 
+  // Helper to grab the exact timestamp of the very last CAN packet received
+  const getLatestDataTime = () => {
+    const buffer = useMqttStore.getState().decodedBuffer;
+    if (buffer && buffer.length > 0) {
+      return buffer[buffer.length - 1].timestamp;
+    }
+    return Date.now(); // Fallback if no data has arrived yet
+  };
+
   // Start button handler
   const handleStart = () => {
-    const now = Date.now(); // Use Unix Timestamp for consistency
-    setStartTime(now);
+    const dataTime = getLatestDataTime();
+    setStartTime(dataTime);
     setElapsed(0);
     setIsRecording(true);
   };
 
   // Stop button handler
   const handleStop = async () => {
-    const endTime = Date.now();
+    const dataTime = getLatestDataTime();
     clearInterval(timerRef.current);
     setIsRecording(false);
 
     try {
-      // Use the new API service
-      const body={
+      const body = {
         sessionId: Number(sessionId),
-        startTime: startTime, // Sending numbers (ms) is safer for calculations
-        endTime: endTime,
+        startTime: startTime, 
+        endTime: dataTime, // Uses the exact timestamp of the last data point
         driverId: driver?.id ? Number(driver.id) : null,
         monopostId: setup?.id  ? Number(setup.id)  : null,
       };
-      console.log(`timestamp info`,body);
+      console.log(`timestamp info`, body);
       await api.saveTimestamp(body);
       console.log("Stint saved successfully");
       alert("Driver Stint Saved!");
@@ -52,11 +61,13 @@ export default function TopActionBar({ sessionId }) {
     }
   };
 
-  // Timer Effect
+  // Timer Effect (Calculates elapsed time based on incoming data flow, not local PC clock)
   useEffect(() => {
     if (isRecording && startTime) {
       timerRef.current = setInterval(() => {
-        setElapsed(Date.now() - startTime);
+        const currentDataTime = getLatestDataTime();
+        // Prevent negative time if data hasn't progressed yet
+        setElapsed(Math.max(0, currentDataTime - startTime));
       }, 1000);
     }
     return () => clearInterval(timerRef.current);
