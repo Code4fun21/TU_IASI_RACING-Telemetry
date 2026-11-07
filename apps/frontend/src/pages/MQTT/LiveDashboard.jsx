@@ -39,7 +39,7 @@ const ALL_SIGNALS = [
     ...ENGINE_SIGNALS,
     ...VITAL_SIGNALS,
     ...ECU_SIGNALS,
-    "GPS_Speed", "GPS_Latitude", "GPS_Longitude", // Explicitly added for custom charts
+    "GPS_Speed", "GPS_Latitude", "GPS_Longitude", 
     "oilPressure", "fuelLevel", "steeringAngle",
     "damperLF", "damperRF", "damperLR", "damperRR",
     "accelerationX", "accelerationY", "accelerationZ",
@@ -143,13 +143,43 @@ export default function LiveDashboard() {
 
   // --- CHART DATA PREPARATION ---
 
-  const liveLaps = useMemo(() => {
+  const calculatedLaps = useMemo(() => {
       const lapPacket = decodedBuffer.slice().reverse().find(p => p.lap_data);
       if (lapPacket && Array.isArray(lapPacket.lap_data)) {
           return lapPacket.lap_data;
       }
       return [];
   }, [decodedBuffer]);
+
+  const latestLapTime = useMemo(() => {
+      for (let i = decodedBuffer.length - 1; i >= 0; i--) {
+          const p = decodedBuffer[i];
+          if (p.lapTime !== undefined) return p.lapTime;
+          if (p.lap_time !== undefined) return p.lap_time;
+          if (p.LapTime !== undefined) return p.LapTime;
+      }
+      return null;
+  }, [decodedBuffer]);
+
+  const [canLaps, setCanLaps] = useState([]);
+  
+  useEffect(() => {
+      if (latestLapTime && latestLapTime !== "--:--.---" && latestLapTime !== 0) {
+          setCanLaps(prev => {
+              const last = prev[prev.length - 1];
+              if (!last || last.lap_time !== latestLapTime) {
+                  return [...prev, { 
+                      lap_time: latestLapTime,
+                      lapTime: latestLapTime, 
+                      ts: latestLapTime 
+                  }];
+              }
+              return prev;
+          });
+      }
+  }, [latestLapTime]);
+
+  const displayLaps = canLaps.length > 0 ? canLaps : calculatedLaps;
 
   // FIX 2: Upgraded Sample & Hold Logic
   const processDataWithHold = (buffer, signalKeys, validator = null) => {
@@ -169,7 +199,7 @@ export default function LiveDashboard() {
                 if (!validator || validator(val, key)) {
                     lastKnown[key] = val;
                     lastKnownRef.current[key] = val;
-                    break; // Found it, stop searching backwards
+                    break; 
                 }
             }
         }
@@ -264,7 +294,7 @@ useEffect(() => {
             LR: lastValidDampers.current.LR,
             RR: lastValidDampers.current.RR,
         });
-    }, 100); // Throttled to update every 100ms (10fps), preventing canvas choking
+    }, 100); 
 
     return () => clearInterval(interval);
 }, []);
@@ -362,7 +392,6 @@ useEffect(() => {
             </div>
         </div>
 
-        {/* BUILD YOUR OWN CHART UI */}
         <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Build Your Own Chart</h3>
             
@@ -418,7 +447,6 @@ useEffect(() => {
             ) : null}
         </div>
 
-        {/* Standard Charts Row */}
         <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">Engine Signals</h3>
             {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataEngine} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
@@ -434,7 +462,6 @@ useEffect(() => {
             {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataECU} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
         </div>
         
-        {/* GPS Chart */}
         <div className="bg-white p-6 rounded-lg shadow">
             <h3 className="text-lg font-medium text-gray-900 text-center mb-4">GPS Speed</h3>
             {decodedBuffer.length > 0 ? (
@@ -444,34 +471,32 @@ useEffect(() => {
             )}
         </div>
 
-         {/* --- DAMPER / SUSPENSION SECTION --- */}
         <div className="bg-white p-6 rounded-lg shadow">
             {decodedBuffer.length > 0 ? <MultiLineChart data={lineDataDamper} /> : <p className="text-center text-gray-400 py-10">Waiting for data...</p>}
         </div>
 
         <div className="flex flex-row justify-center items-center gap-8 p-4 bg-gray-900 rounded shadow-md mt-4">
-    <div className="flex flex-col items-center">
-        <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>
-        <FrontDamperChart 
-            leftData={displayedDampers.LF} 
-            rightData={displayedDampers.RF} 
-            width={150} 
-            height={200} 
-        />
-    </div>
+            <div className="flex flex-col items-center">
+                <h3 className="text-white text-sm font-bold mb-2">FRONT DAMPERS</h3>
+                <FrontDamperChart 
+                    leftData={displayedDampers.LF} 
+                    rightData={displayedDampers.RF} 
+                    width={150} 
+                    height={200} 
+                />
+            </div>
 
-    <div className="flex flex-col items-center">
-        <h3 className="text-white text-sm font-bold mb-2">REAR DAMPERS</h3>
-        <RearDamperChart 
-            leftData={displayedDampers.LR} 
-            rightData={displayedDampers.RR} 
-            width={150} 
-            height={200} 
-        />
-    </div>
-</div>
+            <div className="flex flex-col items-center">
+                <h3 className="text-white text-sm font-bold mb-2">REAR DAMPERS</h3>
+                <RearDamperChart 
+                    leftData={displayedDampers.LR} 
+                    rightData={displayedDampers.RR} 
+                    width={150} 
+                    height={200} 
+                />
+            </div>
+        </div>
 
-        {/* Live Map + Lap Times Panel */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">
             <div className="bg-white p-4 rounded-lg shadow lg:col-span-2 relative flex flex-col min-w-0">
                 <h3 className="text-lg font-medium text-gray-900 text-center mb-2">Live Map</h3>
@@ -492,21 +517,29 @@ useEffect(() => {
 
             <div className="bg-white rounded-lg shadow lg:col-span-1 flex flex-col overflow-hidden min-w-0">
                 <LapTimesPanel 
-                    laps={liveLaps} 
-                    title="Live Lap Times" 
+                    laps={displayLaps} 
+                    title="CAN Lap Times" 
                     className="w-full h-full border-0 shadow-none" 
                 />
             </div>
         </div>
 
-        {/* Gauges */}
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="bg-white p-4 shadow rounded-lg flex flex-col items-center justify-center">
+                <h4 className="text-sm font-medium text-gray-500 mb-4">CAN Lap Time</h4>
+                <div className="text-4xl sm:text-5xl font-mono font-bold text-gray-800">
+                    {latestLapTime || "--:--.---"}
+                </div>
+            </div>
+
             <div className="bg-white p-4 shadow rounded-lg flex justify-center">
                 <GearDisplay data={latestGear} height={300} width={300} />
             </div>
+            
             <div className="bg-white p-4 shadow rounded-lg flex justify-center">
                 <SpeedChart data={latestSpeed} height={300} width={300} />
             </div>
+            
             <div className="bg-white p-4 shadow rounded-lg flex flex-col items-center justify-center">
                 <h4 className="text-sm font-medium text-gray-500 mb-2">Brake Pressure</h4>
                 <BrakePressureChart data={latestBrake} height={200} width={300} />
