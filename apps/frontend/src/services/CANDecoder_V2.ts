@@ -21,7 +21,7 @@ class KalmanFilter2D {
         this.P = [[1, 0], [0, 1]];
     }
 
-filter(measurement: number, timestamp: number): number {
+    filter(measurement: number, timestamp: number): number {
         if (this.first) {
             this.x = [0, measurement];
             this.lastTime = timestamp;
@@ -29,7 +29,7 @@ filter(measurement: number, timestamp: number): number {
             return measurement;
         }
 
-        // FIX: Convert ms to seconds so the covariance matrices don't explode
+        // Convert ms to seconds so the covariance matrices don't explode
         let dt = (timestamp - this.lastTime) / 1000.0; 
         if (dt < 0) dt = 0;
         this.lastTime = timestamp;
@@ -250,7 +250,7 @@ interface SignalConfig {
     filter?: boolean; 
 }
 
-// --- V2 DATABASE (Mapped precisely to your Spreadsheet) ---
+// --- V2 DATABASE ---
 const CAN_DATABASE: Record<string, SignalConfig[]> = {
      // FRONT_ANALOG (uint16, Big Endian)
     "0500": [
@@ -260,7 +260,6 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
     ],
     
     // ACCEL (int16, Big Endian, formula: / 100.0)
-    // ACCEL (int16, Big Endian, formula: / 100.0 to keep m/s^2)
     "0501": [
         { name: "accelerationX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
         { name: "accelerationY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
@@ -269,9 +268,9 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 
     // GYRO (int16, Big Endian, formula: / 100.0)
     "0502": [
-        { name: "gyroX",         offset: 0, size: 2, isSigned: true, divide: 100 },
-        { name: "gyroY",         offset: 2, size: 2, isSigned: true, divide: 100 },
-        { name: "gyroZ",         offset: 4, size: 2, isSigned: true, divide: 100 }
+        { name: "gyroX", offset: 0, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
+        { name: "gyroY", offset: 2, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true },
+        { name: "gyroZ", offset: 4, size: 2, method: "Method_IMU_Acc", isSigned: true, divide: 100, filter: true }
     ],
 
     // GEAR (uint8)
@@ -299,7 +298,7 @@ const CAN_DATABASE: Record<string, SignalConfig[]> = {
 
     // LAP TIME (uint32)
     "0777": [
-        { name: "LAP_MS",        offset: 0, size: 4 } 
+        { name: "lapTime",       offset: 0, size: 4 } 
     ],
 
     // MEGASQUIRT
@@ -344,7 +343,7 @@ export class CANDecoderV2 {
     currPos: GPSPoint | null = null;
     
     gateCheckers: Record<string, GPS_Intersection> = {};
-    currentLap: Record<string, number | boolean | number> = {};
+    currentLap: Record<string, number | boolean | null> = {};
     lapsHistory: any[] = [];
     trackLen: number = 0;
     gateIdx: number = 0;
@@ -396,12 +395,14 @@ export class CANDecoderV2 {
 
     parse(rawString: string) {
         try {
+            // Strip any accidental trailing semicolons or whitespace passed from MqttServices
+            rawString = rawString.replace(/;+$/, '').trim();
+            if (!rawString) return null;
+
             const parts = rawString.split(',');
             if (parts.length < 3) return null;
 
             const timestamp = Number(parts[0]) + 1785056125000;
-           
-            
             
             let canId = parts[1].trim().replace(/^0x/i, '').toUpperCase();
             if (canId.length < 4) canId = canId.padStart(4, "0");
@@ -439,62 +440,47 @@ export class CANDecoderV2 {
                             continue;
 
                         case "Method_IMU_Acc":
-                            // 1. Calculate the base unfiltered value
                             const rawUnfiltered = rawVal / (sig.divide || 100.0); 
-                            
-                            // 2. Map the unfiltered signal to the _RAW variable
                             decodedValues[sig.name + "_RAW"] = Number(rawUnfiltered.toFixed(6));
-                            
                             finalVal = rawUnfiltered;
                             
-                            // 3. Apply Kalman Filter
                             if (sig.filter) {
                                 finalVal = this.applyKalman(sig.name, finalVal, timestamp);
                             }
                             
-                            // 4. Map the filtered signal to the standard variable
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
                             continue;
+                            
                         case "Convert_Damper":
                             const adc = rawVal;
                             
-                            // Apply the polynomial formula
                             let distance = (-7.430249176415e-15) * Math.pow(adc, 4) 
                                          + (7.651688555578e-11) * Math.pow(adc, 3) 
                                          + (-2.495514301462e-07) * Math.pow(adc, 2) 
                                          + (-1.529198785943e-03) * adc 
                                          + 7.301809527430;
 
-                            // Save the raw ADC value just in case you want to view it later
                             decodedValues[sig.name + "_RAW"] = adc; 
-                            
                             finalVal = distance;
-                            
-                            // Map the final smoothed distance to the standard variable
                             decodedValues[sig.name] = Number(finalVal.toFixed(6));
                             continue;
 
                         case "Convert_Brake":
                             const adcBrk = rawVal;
                             
-                            // 1. Enter your recorded ADC values here:
-                            const ADC_REST = 500;  // Example: Replace with actual resting baseline
-                            const ADC_MAX = 3500;  // Example: Replace with actual max braking average
+                            const ADC_REST = 500; 
+                            const ADC_MAX = 3500; 
                             
-                            // 2. Calculate constants
                             const ADC_ZERO = ADC_REST + 20; 
                             const m = 100.0 / (ADC_MAX - ADC_ZERO);
                             const c = -m * ADC_ZERO;
                             
-                            // 3. Evaluate and clamp
                             let brakePercent = (m * adcBrk) + c;
-                            brakePercent = Math.max(0, Math.min(100, brakePercent)); // Clamp 0-100
+                            brakePercent = Math.max(0, Math.min(100, brakePercent)); 
                             
-                            // 4. Save raw and final values
                             decodedValues[sig.name + "_RAW"] = adcBrk; 
                             finalVal = brakePercent;
                             
-                            // (Optional) Kalman filter will apply automatically below if sig.filter is true
                             decodedValues[sig.name] = Number(finalVal.toFixed(2));
                             continue;
                     }
@@ -509,7 +495,6 @@ export class CANDecoderV2 {
                     if (sig.filter && sig.method !== "Method_IMU_Acc" && sig.method !== "Method_IMU_Gyro") {
                         finalVal = this.applyKalman(sig.name, finalVal, timestamp);
                     }
-                    
                     
                     decodedValues[sig.name] = Number(finalVal.toFixed(6));
                 }
@@ -542,11 +527,11 @@ export class CANDecoderV2 {
 
     applyKalman(name: string, val: number, timestamp: number): number {
         if (!this.filtersKalman[name]) {
-            let Q: [[number, number], [number, number]] = [[1e-3, 0], [0, 1e-2]];
+            let Q: [[number, number], [number, number]] = [[1e-2, 0], [0,1e-1]];
             let R = 0.5; 
             
             if (name.toLowerCase().includes("acc") || name.toLowerCase().includes("gyro")) {
-                R = 10; 
+                R = 2; 
             }
 
             this.filtersKalman[name] = new KalmanFilter2D(Q, R);
@@ -563,27 +548,44 @@ export class CANDecoderV2 {
     }
 
 
-    checkCross(time: number, curr: GPSPoint) {
+checkCross(time: number, curr: GPSPoint) {
         if (!this.prevPos) return;
         const prev = this.prevPos;
         const dist = this.haversine(prev.lat, prev.lon, curr.lat, curr.lon);
 
+        if (this.currentLap["S0"]) {
+            this.trackLen += dist;
+        }
+
+        // 1. Check all standard turn gates (T1, T2, etc.)
         Object.keys(this.gateCheckers).forEach(gateName => {
             if (gateName.startsWith("T")) {
                 if (!this.currentLap[gateName]) {
                     const turnGate = this.gateCheckers[gateName];
                     turnGate.update_points(prev, curr);
-
                     if (turnGate.get_intersection_time()) {
                         const tTurn = turnGate.get_time();
-                        if (tTurn) {
-                            this.currentLap[gateName] = tTurn;
-                        }
+                        if (tTurn) this.currentLap[gateName] = tTurn;
                     }
                 }
             }
         });
 
+        // 2. Check S1 and S2 independently (Fixes the 2-laps-in-1 bug)
+        ["S1", "S2"].forEach(gateName => {
+            if (this.gateCheckers[gateName] && this.currentLap["S0"] && !this.currentLap[gateName]) {
+                const g = this.gateCheckers[gateName];
+                g.update_points(prev, curr);
+                if (g.get_intersection_time()) {
+                    const t = g.get_time();
+                    if (t) {
+                        this.currentLap[gateName] = t;
+                    }
+                }
+            }
+        });
+
+        // 3. Check S0 (Start / Finish)
         if (this.gateCheckers["S0"]) {
             const s0 = this.gateCheckers["S0"];
             s0.update_points(prev, curr);
@@ -591,55 +593,34 @@ export class CANDecoderV2 {
             if (s0.get_intersection_time()) {
                 const t0 = s0.get_time();
                 
-                if (this.currentLap["S2"] && t0 && t0 > Number(this.currentLap["S2"])) {
+                // LAP COMPLETED! (Requires at least 15 seconds to prevent double triggers)
+                if (this.currentLap["S0"] && t0 && t0 - Number(this.currentLap["S0"]) > 15000) {
                     this.currentLap["S3"] = t0; 
                     this.currentLap["complete"] = true;
                     this.currentLap["dist"] = this.trackLen;
                     this.currentLap["ts"] = t0; 
                     this.currentLap["lap"] = this.lapCount; 
-
+                    this.currentLap["lap_time"] = t0 - Number(this.currentLap["S0"]); // Safe duration for UI
+                    
+                    // Push a copy to history
                     this.lapsHistory.push({ ...this.currentLap });
                     
+                    // Reset for the next lap
                     this.lapCount++;
                     this.currentLap = { "S0": t0 }; 
                     this.trackLen = 0;
-                    this.gateIdx = 1;
-                    this.justS0 = true;
                 } 
+                // FIRST EVER CROSSING
                 else if (t0 && !this.currentLap["S0"]) {
                     this.lapCount = 1;
                     this.currentLap = { "S0": t0 };
                     this.trackLen = 0;
-                    this.gateIdx = 1;
-                    this.justS0 = true;
                 }
             }
         }
-
-        const seq = ["S0", "S1", "S2"];
-        if (this.gateIdx > 0 && this.gateIdx < seq.length) {
-            const targetGate = seq[this.gateIdx];
-            if (this.gateCheckers[targetGate]) {
-                const g = this.gateCheckers[targetGate];
-                g.update_points(prev, curr);
-                
-                if (g.get_intersection_time()) {
-                    const t = g.get_time();
-                    if (t) {
-                        this.currentLap[targetGate] = t;
-                        this.gateIdx++;
-                    }
-                }
-            }
-        }
-
-        if (this.gateIdx > 0 && !this.justS0) {
-            this.trackLen += dist;
-        }
-        this.justS0 = false;
+        
         this.prevPos = curr; 
     }
-    
     getGatesData() {
         return {
             timestamps: this.lapsHistory.map(l => l.ts || 0),

@@ -256,6 +256,11 @@ useEffect(() => {
                 "Acceleration_on_X_axis_RAW": "accelerationX_RAW", 
                 "Acceleration_on_Y_axis_RAW": "accelerationY_RAW", 
                 "Acceleration_on_Z_axis_RAW": "accelerationZ_RAW", 
+
+                "Acceleration_on_X_axis": "accelerationX", 
+                "Acceleration_on_Y_axis": "accelerationY", 
+                "Acceleration_on_Z_axis": "accelerationZ",
+                "Lap_Times": "lapTime", 
                 
                 
             };
@@ -323,14 +328,14 @@ useEffect(() => {
             Sync_loss_reason_code: extract("Sync_loss_reason_code"),
             Average_fuel_flow: extract("Average_fuel_flow"),
             Distance: extract("Distance"),
-            Acceleration_on_X_axis_rotated: extract("Acceleration_on_X_axis_rotated"), 
-            Acceleration_on_Y_axis_rotated: extract("Acceleration_on_Y_axis_rotated"),
-            Acceleration_on_Z_axis_rotated: extract("Acceleration_on_Z_axis_rotated"), 
+            Acceleration_on_X_axis: extract("Acceleration_on_X_axis"), 
+            Acceleration_on_Y_axis: extract("Acceleration_on_Y_axis"),
+            Acceleration_on_Z_axis: extract("Acceleration_on_Z_axis"), 
             
             Acceleration_on_X_axis_RAW: extract("Acceleration_on_X_axis_RAW"), 
             Acceleration_on_Y_axis_RAW: extract("Acceleration_on_Y_axis_RAW"),
             Acceleration_on_Z_axis_RAW: extract("Acceleration_on_Z_axis_RAW"), 
-           
+            Lap_Times:extract("Lap_Times"),
             
             Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
         };
@@ -663,9 +668,9 @@ const speedVsDistance = useMemo(() => {
         ["Avg Fuel Flow", "Average_fuel_flow", "cc/min"],
 
         
-        ["Accel X (rotated)", "Acceleration_on_X_axis_rotated", "G"], 
-        ["Accel Y (rotated)", "Acceleration_on_Y_axis_rotated", "G"],
-        ["Accel Z (rotated)", "Acceleration_on_Z_axis_rotated", "G"],
+        ["Accel X", "Acceleration_on_X_axis", "G"], 
+        ["Accel Y", "Acceleration_on_Y_axis", "G"],
+        ["Accel Z", "Acceleration_on_Z_axis", "G"],
 
         ["Accel X (RAW)", "Acceleration_on_X_axis_RAW", "G"], 
         ["Accel Y (RAW)", "Acceleration_on_Y_axis_RAW", "G"],

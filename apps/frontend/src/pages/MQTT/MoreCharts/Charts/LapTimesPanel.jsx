@@ -2,14 +2,14 @@ import PropTypes from "prop-types";
 
 function toMs(x) {
   const n = Number(x);
-  return Number.isFinite(n) ? Math.round(n * 1000) : NaN; // unix seconds → ms
+  return Number.isFinite(n) ? n : NaN; // unix seconds → ms
 }
 
 function fmt(ms) {
-  if (!Number.isFinite(ms)) return "—";
+  if (!Number.isFinite(ms) || ms < 0) return "—";
   const m = Math.floor(ms / 60000);
   const s = Math.floor((ms % 60000) / 1000);
-  const f = Math.round(ms % 1000).toString().padStart(3, "0");
+  const f = Math.floor(ms % 1000).toString().padStart(3, "0");
   return `${m}:${s.toString().padStart(2, "0")}.${f}`;
 }
 
@@ -17,9 +17,9 @@ export default function LapTimesPanel({ laps, title = "Lap Times" }) {
   const rows = (Array.isArray(laps) ? laps : []).map((lap, idx) => {
     const s0 = toMs(lap.S0), s1 = toMs(lap.S1), s2 = toMs(lap.S2), s3 = toMs(lap.S3);
     const t1 = s1 - s0, t2 = s2 - s1, t3 = s3 - s2;
-    const total = t1 + t2 + t3;
+    const total = s3 - s0;
     return {
-      lapNo: idx + 1,
+      lapNo: lap.lap || idx + 1,
       total, t1, t2, t3,
       dist: Number(lap.dist),
     };
@@ -66,6 +66,7 @@ LapTimesPanel.propTypes = {
     S2: PropTypes.number,
     S3: PropTypes.number,
     dist: PropTypes.number,
+    lap: PropTypes.number,
   })),
   title: PropTypes.string,
 };

@@ -176,11 +176,16 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!ready || ready.length === 0) return {};
 
     const allT = ready.flatMap(s => s.data.map(p => p[0])).filter(Number.isFinite);
-    const minTs = allT.length ? Math.min(...allT) : undefined;
-    const maxTs = allT.length ? Math.max(...allT) : undefined;
+    
+    // BUG FIX: Prevent stack overflow by using reduce instead of Math.min(...allT)
+    const minTs = allT.length ? allT.reduce((min, val) => val < min ? val : min, allT[0]) : undefined;
+    const maxTs = allT.length ? allT.reduce((max, val) => val > max ? val : max, allT[0]) : undefined;
     const span  = (minTs != null && maxTs != null) ? (maxTs - minTs) : 0;
 
-    const isSparse = Math.max(0, ...ready.map(s => s.data.length)) < MIN_POINTS_FOR_SCATTER;
+    // BUG FIX: Prevent stack overflow by using reduce instead of Math.max(...ready.map(...))
+    const maxDataLength = ready.reduce((max, s) => s.data.length > max ? s.data.length : max, 0);
+    const isSparse = maxDataLength < MIN_POINTS_FOR_SCATTER;
+    
     let xMin = null, xMax = null;
     if (isSparse && minTs != null && maxTs != null) {
       const pad = Math.max(5, Math.round(span * 0.05));

@@ -1,8 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTelemetry } from "../store/OfflineDataStoreadge";
-
-// --- COMPONENTS ---
 import VitalChart from "./MQTT/MoreCharts/Charts/VitalChart";
 
 // --- CONSTANTS ---
@@ -13,8 +11,8 @@ const SIGNAL_SPECS = [
     ["Gear", "Gear", "-"], ["Brake Pressure", "Brake_Pressure", "Bar"], ["Steering Angle", "Steering_Angle", "deg"],
     ["BSPD", "BSPD", "-"],
    
-     ["Damper FL", "Damper_Left_Front", "cm"], ["Damper FR", "Damper_Right_Front", "cm"],
-        ["Damper RL", "Damper_Left_Rear", "cm"], ["Damper RR", "Damper_Right_Rear", "cm"],
+    ["Damper FL", "Damper_Left_Front", "cm"], ["Damper FR", "Damper_Right_Front", "cm"],
+    ["Damper RL", "Damper_Left_Rear", "cm"], ["Damper RR", "Damper_Right_Rear", "cm"],
     ["Air Density Corr.", "Air_density_correction", "%"], ["Warmup Corr.", "Warmup_correction", "%"],
     ["TPS Accel", "TPS_based_acceleration", "%"], ["TPS Fuel Cut", "TPS_based_fuel_cut", "%"],
     ["Total Fuel Corr.", "Total_fuel_correction", "%"], ["Cold Advance", "Cold_advance", "deg"],
@@ -36,14 +34,55 @@ const SIGNAL_SPECS = [
     ["Gyro Z (RAW)", "Gyroscope_on_Z_axis", "rad/s"],
 ];
 
+// --- LAZY RENDER WRAPPER TO PREVENT OOM CRASHES ---
+function LazyChart({ title, dataKey, timeStamps, values, unit }) {
+    const [isVisible, setIsVisible] = useState(false);
+    const containerRef = useRef(null);
+
+    useEffect(() => {
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                if (entry.isIntersecting) {
+                    setIsVisible(true);
+                    observer.disconnect(); // Once rendered, keep it rendered
+                }
+            },
+            { rootMargin: "200px" } // Render slightly before it scrolls into view
+        );
+        
+        if (containerRef.current) observer.observe(containerRef.current);
+        return () => observer.disconnect();
+    }, []);
+
+    return (
+        <div ref={containerRef} className="rounded-lg bg-white p-4 shadow min-h-[300px]">
+            <div className="flex items-center justify-between mb-2">
+                <h3 className="font-bold text-gray-800">{title}</h3>
+                <span className="text-xs font-mono bg-gray-100 text-gray-500 px-2 py-1 rounded border border-gray-200">
+                    Key: {dataKey}
+                </span>
+            </div>
+            {isVisible ? (
+                <VitalChart
+                    dateTime={timeStamps}
+                    series={[{ name: title, data: values, unit: unit }]}
+                    height={250}
+                />
+            ) : (
+                <div className="w-full h-[250px] flex items-center justify-center bg-gray-50 text-gray-400 border border-dashed rounded">
+                    Scrolling to load...
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function DashboardDebug() {
     const location = useLocation();
     const navigate = useNavigate();
     
-    // 1. Grab BOTH the setters AND the existing data from your global store
     const { setTelemetryData, setSessionInfo, telemetryData, sessionInfo } = useTelemetry();
     
-    // 2. Check if we just arrived from the FileActionModal (fresh file)
     const { fileData, session: navSession } = location.state || {};
     const currentSession = navSession || sessionInfo;
 
@@ -53,9 +92,8 @@ export default function DashboardDebug() {
         return [];
     }, [fileData]);
 
-    // 3. Parse Raw Data (Only runs if a fresh file was passed in location.state)
     const parsedData = useMemo(() => {
-        if (!rawData || rawData.length === 0) return null; // Return null to fall back to global store
+        if (!rawData || rawData.length === 0) return null; 
 
         const extract = (targetKey, scaleFn = (v) => v) => {
             const keyMap = {
@@ -145,10 +183,8 @@ export default function DashboardDebug() {
         };
     }, [rawData]);
 
-    // 4. Determine Active Data: Use newly parsed data if it exists, otherwise use the global store!
     const activeData = parsedData || telemetryData;
 
-    // 5. Save Context (Only if we just parsed fresh data)
     useEffect(() => {
         if (parsedData && currentSession?.id) {
             setTelemetryData(parsedData); 
@@ -156,50 +192,37 @@ export default function DashboardDebug() {
         }
     }, [parsedData, currentSession, setTelemetryData, setSessionInfo]);
 
-    // --- DEBUGGING ACTION ---
     const handlePrintData = () => {
         console.log("=== CURRENT ACTIVE DATA OBJECT ===");
         console.log(activeData);
         alert("Data object printed to the browser console (Press F12 to view)");
     };
 
-    // ==========================================
-    // RENDER CHARTS
-    // ==========================================
-    
     const activeCharts = useMemo(() => {
         if (!activeData) return [];
         
         return SIGNAL_SPECS.map(([label, key, unit]) => {
             const seriesData = activeData[key];
-            
             if (!seriesData || seriesData.length === 0) return null;
 
             const timeStamps = seriesData.map(pt => pt[0]);
             const values = seriesData.map(pt => pt[1]);
 
             return (
-                <div key={key} className="rounded-lg bg-white p-4 shadow">
-                    <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-bold text-gray-800">{label}</h3>
-                        <span className="text-xs font-mono bg-gray-100 text-gray-500 px-2 py-1 rounded border border-gray-200">
-                            Key: {key}
-                        </span>
-                    </div>
-                    <VitalChart
-                        dateTime={timeStamps}
-                        series={[{ name: label, data: values, unit: unit }]}
-                        height={250}
-                    />
-                </div>
+                <LazyChart 
+                    key={key} 
+                    title={label} 
+                    dataKey={key} 
+                    timeStamps={timeStamps} 
+                    values={values} 
+                    unit={unit} 
+                />
             );
         }).filter(Boolean); 
     }, [activeData]);
 
     return (
         <div className="p-4 space-y-6 bg-gray-50 min-h-screen">
-            
-            {/* NAVIGATION & DEBUG HEADER */}
             <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-indigo-500 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-gray-900">Telemetry Debug View</h1>
