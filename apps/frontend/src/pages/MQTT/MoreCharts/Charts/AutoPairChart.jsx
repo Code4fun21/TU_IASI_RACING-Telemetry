@@ -198,10 +198,10 @@ const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
           
           if (s.unit === 'G' || s.unit === 'rad/s') {
               // If the actual data max is higher than 10, use the data max. Otherwise, lock to 10.
-              max = (value) => value.max > 10 ? Math.ceil(value.max) : 10;
+              max = (value) => value.max > 10 ? Math.ceil(value.max) : 1.8;
               
               // If the actual data min is lower than -10, use the data min. Otherwise, lock to -10.
-              min = (value) => value.min < -10 ? Math.floor(value.min) : -10;
+              min = (value) => value.min < -10 ? Math.floor(value.min) : -1.8;             ;
           }
 
       return {

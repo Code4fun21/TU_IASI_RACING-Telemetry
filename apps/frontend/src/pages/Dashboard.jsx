@@ -886,7 +886,7 @@ const speedVsDistance = useMemo(() => {
             {selectedLap != null && (
                 <div className="rounded-lg bg-white p-4 shadow">
                     <h3 className="font-medium text-gray-700 mb-2">
-                        Speed vs Distance (Lap {selectedLap + 1})
+                        Speed vs Distance (Lap {selectedLap})
                     </h3>
                     <VitalChart_distance
                         distance={speedVsDistance.dist}

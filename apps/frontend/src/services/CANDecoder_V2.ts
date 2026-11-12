@@ -440,7 +440,7 @@ export class CANDecoderV2 {
                             continue;
 
                         case "Method_IMU_Acc":
-                            const rawUnfiltered = rawVal / (sig.divide || 100.0); 
+                            const rawUnfiltered = rawVal / (sig.divide || 100.0)/9.80665; 
                             decodedValues[sig.name + "_RAW"] = Number(rawUnfiltered.toFixed(6));
                             finalVal = rawUnfiltered;
                             
