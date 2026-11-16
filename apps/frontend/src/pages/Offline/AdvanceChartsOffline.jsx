@@ -17,16 +17,19 @@ const getStandardDeviation = (array, mean) => {
 
 // --- HELPER 1: ADVANCED CALIBRATION ROUTINE ---
 const calculateSessionCalibration = (telemetryData) => {
-    if (!telemetryData || !telemetryData.GPS_Speed || !telemetryData.RPM || 
-        !telemetryData.Acceleration_on_X_axis_RAW || !telemetryData.Acceleration_on_Z_axis_RAW || !telemetryData.Acceleration_on_Y_axis_RAW) {
-        return { x_bias: 0, y_bias: 1.0, z_bias: 0, scale: 1.0, status: "No Data" };
+    if (!telemetryData || !telemetryData.Acceleration_on_X_axis || !telemetryData.Acceleration_on_Z_axis || !telemetryData.Acceleration_on_Y_axis) {
+        return { x_bias: 0, y_bias: 0, z_bias: 0, scale: 1.0, status: "No Data" };
     }
 
     const speed = telemetryData.GPS_Speed;
     const rpm = telemetryData.RPM;
-    const accX = telemetryData.Acceleration_on_X_axis_RAW; // Long
-    const accY = telemetryData.Acceleration_on_Y_axis_RAW; // Vert (1G)
-    const accZ = telemetryData.Acceleration_on_Z_axis_RAW; // Lat
+    const accX = telemetryData.Acceleration_on_Y_axis; // Long
+    const accY = telemetryData.Acceleration_on_X_axis; // Vert (1G)
+    const accZ = telemetryData.Acceleration_on_Z_axis; // Lat
+
+    if (!speed || !rpm) {
+        return { x_bias: 0, y_bias: 0, z_bias: 0, scale: 1.0, status: "Fallback" };
+    }
 
     const len = Math.min(speed.length, rpm.length, accX.length, accY.length, accZ.length);
     
@@ -50,13 +53,18 @@ const calculateSessionCalibration = (telemetryData) => {
         }
     }
 
-    if (maxWindowSize < 50) return { x_bias: 0, y_bias: 1.0, z_bias: 0, scale: 1.0, status: "Failed (No Window)" };
+    if (currentCount > maxWindowSize) {
+        maxWindowSize = currentCount;
+        bestStartIndex = currentStartIndex;
+    }
+
+    if (maxWindowSize < 50) return { x_bias: 0, y_bias: 0, z_bias: 0, scale: 1.0, status: "Fallback" };
 
     // --- STEP 2: CALCULATE BIAS (STATIC GRAVITY LEAK) ---
     let sumX = 0, sumY = 0, sumZ = 0;
     for (let i = bestStartIndex; i < bestStartIndex + maxWindowSize; i++) {
-        sumX += accX[i][1];
-        sumY += accY[i][1];
+        sumX += accX[i][1] ;
+        sumY += accY[i][1] * -1;
         sumZ += accZ[i][1];
     }
 
@@ -307,13 +315,13 @@ export default function AdvanceChartsOffline() {
         return result;
     };
 
-    const calibratedData = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis_RAW; 
-        const accY = filtered.Acceleration_on_Y_axis_RAW; 
-        const accZ = filtered.Acceleration_on_Z_axis_RAW; 
+const calibratedData = useMemo(() => {
+        const accX = filtered.Acceleration_on_Y_axis; 
+        const accY = filtered.Acceleration_on_X_axis; 
+        const accZ = filtered.Acceleration_on_Z_axis; 
         const gpsSeries = filtered.GPS_Speed || [];
 
-        if (!accX || !accY || !accZ || calibration.status !== "Success") return null;
+        if (!accX || !accY || !accZ || calibration.status === "No Data") return null;
 
         const len = Math.min(accX.length, accY.length, accZ.length);
         
@@ -342,7 +350,7 @@ export default function AdvanceChartsOffline() {
 
         for (let i = 0; i < len; i++) {
             const time = accX[i][0];
-            let x = accX[i][1]; let y = accY[i][1]; let z = accZ[i][1]; 
+            let x = accX[i][1] ; let y = accY[i][1] * -1; let z = accZ[i][1]; 
 
             let x_leveled = x * cosP - z * sinP;
             let z_temp    = x * sinP + z * cosP;
@@ -351,8 +359,8 @@ export default function AdvanceChartsOffline() {
 
             times.push(time);
             
-            rawLongPairs.push([time, x_leveled * -1]);
-            rawLatPairs.push([time, y_leveled * -1]);
+            rawLongPairs.push([time, x_leveled]);
+            rawLatPairs.push([time, y_leveled]);
             rawVertPairs.push([time, z_final]); 
         }
 
@@ -394,7 +402,7 @@ export default function AdvanceChartsOffline() {
             seriesVert.push([t, rawVertValues[i]]);
             
             const speedAtT = getInterpolatedSpeed(t);
-            if (speedAtT >= 30) {
+            if (gpsSeries.length === 0 || speedAtT >= 30) {
                 ggPoints.push([finalLat[i], finalLong[i]]);
             }
         }
@@ -405,12 +413,12 @@ export default function AdvanceChartsOffline() {
             seriesVert,
             ggPoints
         };
-    }, [filtered.Acceleration_on_X_axis_RAW, filtered.Acceleration_on_Y_axis_RAW, filtered.Acceleration_on_Z_axis_RAW, filtered.GPS_Speed, calibration, bw]);
+    }, [filtered.Acceleration_on_X_axis, filtered.Acceleration_on_Y_axis, filtered.Acceleration_on_Z_axis, filtered.GPS_Speed, calibration, bw]);
 
     // --- GENERATE RAW G-G DATA (No Calibration) ---
     const rawGGData = useMemo(() => {
-        const accX = filtered.Acceleration_on_X_axis_RAW; 
-        const accZ = filtered.Acceleration_on_Z_axis_RAW; 
+        const accX = filtered.Acceleration_on_X_axis; 
+        const accZ = filtered.Acceleration_on_Z_axis; 
 
         if (!accX || !accZ) return [];
 
