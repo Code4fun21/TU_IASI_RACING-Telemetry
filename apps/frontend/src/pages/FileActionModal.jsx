@@ -7,6 +7,9 @@ import { api } from "../services/api";
 
 export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isSavingSandbox, setIsSavingSandbox] = useState(false);
+    const [isSandbox, setIsSandbox] = useState(false);
+    const [notes, setNotes] = useState("");
     
     // State to track if valid data is ready to view
     const [hasValidData, setHasValidData] = useState(false);
@@ -16,6 +19,11 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
 
     // 1. Check File Status on Open
     useEffect(() => {
+        if (open && session) {
+            setIsSandbox(Boolean(session.is_sandbox));
+            setNotes(session.notes || "");
+        }
+
         if (open && session?.decodedFileName) {
             setCheckingStatus(true);
             
@@ -43,6 +51,22 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     }, [open, session]);
 
     if (!session) return null;
+
+    const handleSaveSandboxSettings = async () => {
+        setIsSavingSandbox(true);
+        try {
+            await api.updateSession(session.id, {
+                is_sandbox: isSandbox ? 1 : 0,
+                notes: notes.trim() || null
+            });
+            if (onSuccess) onSuccess();
+        } catch (err) {
+            console.error("Failed to update sandbox settings:", err);
+            alert("Failed to update sandbox settings.");
+        } finally {
+            setIsSavingSandbox(false);
+        }
+    };
 
     // --- ACTION: VIEW ---
     const handleViewDecoded = async () => {
@@ -156,7 +180,7 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
     };
 
     return (
-        <Dialog open={open} onClose={() => !isProcessing && setOpen(false)} className="relative z-50">
+        <Dialog open={open} onClose={() => !isProcessing && !isSavingSandbox && setOpen(false)} className="relative z-50">
             <div className="fixed inset-0 bg-black/50" aria-hidden="true" />
             <div className="fixed inset-0 flex items-center justify-center p-4">
                 <DialogPanel className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
@@ -164,9 +188,58 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
                         Session Action
                     </DialogTitle>
                     
-                    <div className="mb-6 p-3 bg-gray-50 rounded border border-gray-200 text-sm">
+                    <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200 text-sm">
                         <p className="text-gray-500 mb-1">Raw File:</p>
                         <p className="font-mono text-gray-800 break-all">{session.csvFileName}</p>
+                    </div>
+
+                    <div className="mb-6 p-3 bg-indigo-50/60 rounded border border-indigo-200 text-sm space-y-3">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="font-semibold text-gray-800">Sandbox Access</p>
+                                <p className="text-xs text-gray-500">
+                                    {hasValidData ? "Show this session in the Sandbox dropdown" : "Decode file first to enable Sandbox"}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isSandbox}
+                                disabled={!hasValidData && !isSandbox}
+                                onClick={() => setIsSandbox(!isSandbox)}
+                                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out disabled:opacity-40 disabled:cursor-not-allowed ${
+                                    isSandbox ? "bg-indigo-600" : "bg-gray-300"
+                                }`}
+                            >
+                                <span
+                                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                        isSandbox ? "translate-x-5" : "translate-x-0"
+                                    }`}
+                                />
+                            </button>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-medium text-gray-700 mb-1">
+                                Session Notes
+                            </label>
+                            <textarea
+                                rows={2}
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                placeholder="e.g. Reverse track, clean 1:08 laps..."
+                                className="w-full rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-800 focus:border-indigo-500 focus:outline-none"
+                            />
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={handleSaveSandboxSettings}
+                            disabled={isSavingSandbox || isProcessing}
+                            className="w-full rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:bg-gray-400 transition-colors"
+                        >
+                            {isSavingSandbox ? "Saving..." : "Save Sandbox & Notes"}
+                        </button>
                     </div>
 
                     {checkingStatus ? (
@@ -250,7 +323,7 @@ export default function FileActionModal({ open, setOpen, session, onSuccess }) {
 
                             <button
                                 onClick={() => setOpen(false)}
-                                disabled={isProcessing}
+                                disabled={isProcessing || isSavingSandbox}
                                 className="mt-4 w-full rounded-md bg-gray-100 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-gray-200"
                             >
                                 Cancel

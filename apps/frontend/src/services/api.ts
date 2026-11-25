@@ -37,8 +37,8 @@ export const api = {
     });
     return response.data;
   },
-
-  // --- SESSIONS ---
+  
+// --- SESSIONS ---
   saveSession: async (sessionData: Session) => {
    
     const response = await axios.post<{ success: boolean; id: number }>(
@@ -55,6 +55,10 @@ export const api = {
   getSessionById: async(sessionId: number)=>{
       const response = await axios.get<Session>(`${API_URL}/sessions/${sessionId}`,);
       return response.data;
+  },
+  updateSession: async (sessionId: number, updates: Partial<Session>) => {
+    const response = await axios.patch(`${API_URL}/sessions/${sessionId}`, updates);
+    return response.data;
   },
   deleteSession: async (sessionId: number) => {
     const response = await axios.delete(`${API_URL}/sessions/${sessionId}`);

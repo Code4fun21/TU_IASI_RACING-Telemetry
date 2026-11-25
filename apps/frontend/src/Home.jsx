@@ -34,8 +34,12 @@ function Home() {
     }
 
     const onClickAddFile = async () => {
-    navigate("/add-file"); // This matches the path in App.tsx
-}
+        navigate("/add-file"); // This matches the path in App.tsx
+    }
+
+    const onClickSandBox = () => {
+        navigate("/sand-box");
+    };
 
     return (
         <>
@@ -73,6 +77,15 @@ function Home() {
                                 className="flex w-full justify-center rounded-md bg-red-500 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-sm hover:bg-red-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500"
                             >
                                 Add new data file
+                            </button>
+                        </div>
+                        <div>
+                            <button
+                                type="submit"
+                                onClick={onClickSandBox}
+                                className="flex w-full justify-center rounded-md bg-red-500 px-3 py-1.5 text-sm/6 font-semibold text-white shadow-sm hover:bg-red-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                            >
+                                Sand Box
                             </button>
                         </div>
                     </div>

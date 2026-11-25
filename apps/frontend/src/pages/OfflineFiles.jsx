@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { FolderIcon, ChevronLeftIcon, ChevronRightIcon, TrashIcon } from "@heroicons/react/20/solid";
 import logo from "../assets/tuiasilogo.png";
@@ -11,6 +11,7 @@ function OfflineFiles() {
     const sessions = location.state?.files || []; 
     
     const [sessionWithTracks, setSessionWithTracks] = useState([]);
+    const [trackSortOrder, setTrackSortOrder] = useState("asc");
     
     // Pagination State
     const [currentPage, setCurrentPage] = useState(1);
@@ -39,13 +40,34 @@ function OfflineFiles() {
         processSessions();
     }, [sessions]);
 
+    const sortedSessions = useMemo(() => {
+        return [...sessionWithTracks].sort((a, b) => {
+            const trackA = a.trackName || "";
+            const trackB = b.trackName || "";
+            const isUnknownA = !trackA || trackA === "Unknown Track";
+            const isUnknownB = !trackB || trackB === "Unknown Track";
+
+            if (isUnknownA && isUnknownB) return 0;
+            if (isUnknownA) return 1;
+            if (isUnknownB) return -1;
+
+            const cmp = trackA.localeCompare(trackB, undefined, { numeric: true, sensitivity: "base" });
+            return trackSortOrder === "asc" ? cmp : -cmp;
+        });
+    }, [sessionWithTracks, trackSortOrder]);
+
     // 2. Pagination Logic
-    const totalPages = Math.ceil(sessionWithTracks.length / itemsPerPage);
+    const totalPages = Math.ceil(sortedSessions.length / itemsPerPage);
     const indexOfLastItem = currentPage * itemsPerPage;
     const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-    const currentItems = sessionWithTracks.slice(indexOfFirstItem, indexOfLastItem);
+    const currentItems = sortedSessions.slice(indexOfFirstItem, indexOfLastItem);
 
     const paginate = (pageNumber) => setCurrentPage(pageNumber);
+
+    const handleToggleTrackSort = () => {
+        setTrackSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+        setCurrentPage(1);
+    };
 
     // 3. Click Handler - Opens Modal instead of navigating
     const onClickReadFile = (session) => {
@@ -81,7 +103,16 @@ function OfflineFiles() {
                 <img alt="Team Logo" src={logo} className="mx-auto h-10 w-auto" />
                 
                 <div className="mt-8">
-                    <h2 className="text-sm font-medium text-gray-200">Session Files</h2>
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-sm font-medium text-gray-200">Session Files</h2>
+                        <button
+                            type="button"
+                            onClick={handleToggleTrackSort}
+                            className="rounded-md border border-gray-600 bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-200 hover:bg-gray-600 transition-colors"
+                        >
+                            Sort by Track ({trackSortOrder === "asc" ? "A → Z" : "Z → A"})
+                        </button>
+                    </div>
                     
                     {/* List of Files */}
                     <ul role="list" className="mt-3 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-2">
@@ -117,7 +148,7 @@ function OfflineFiles() {
                     </ul>
 
                     {/* Pagination Controls */}
-                    {sessionWithTracks.length > itemsPerPage && (
+                    {sortedSessions.length > itemsPerPage && (
                         <div className="flex items-center justify-between border-t border-gray-600 bg-gray-800 px-4 py-3 sm:px-6 mt-6 rounded-lg shadow-sm">
                             {/* Mobile Controls */}
                             <div className="flex flex-1 justify-between sm:hidden">

@@ -13,7 +13,7 @@ export const createSession = (sessionData) => {
 };
 
 export const updateSession = (id, sessionData) => {
-    return apiClient.put(`api/monoposts/${id}`, sessionData);
+    return apiClient.put(`api/sessions/${id}`, sessionData);
 };
 
 export const deleteSession = (id) => {
