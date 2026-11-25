@@ -11,7 +11,8 @@ function OfflineFiles() {
     const sessions = location.state?.files || []; 
     
     const [sessionWithTracks, setSessionWithTracks] = useState([]);
-    const [trackSortOrder, setTrackSortOrder] = useState("asc");
+    const [tracks, setTracks] = useState([]);
+    const [selectedTrackId, setSelectedTrackId] = useState("");
     
     // Pagination State
     const [currentPage, setCurrentPage] = useState(1);
@@ -21,11 +22,35 @@ function OfflineFiles() {
     const [selectedSession, setSelectedSession] = useState(null);
     const [isActionModalOpen, setIsActionModalOpen] = useState(false);
 
+    useEffect(() => {
+        const loadTracks = async () => {
+            try {
+                const res = api.getTracks
+                    ? await api.getTracks()
+                    : api.getAllTracks
+                        ? await api.getAllTracks()
+                        : [];
+                setTracks(Array.isArray(res) ? res : res?.tracks || []);
+            } catch (err) {
+                console.error("Failed to fetch tracks:", err);
+            }
+        };
+        loadTracks();
+    }, []);
+
     // 1. Process Session Names (Extract Track Name)
     useEffect(() => {
         const processSessions = () => {
             if (!sessions) return;
             const processed = sessions.map(session => {
+                const dbTrack = tracks.find(t => session.trackId != null && String(t.id) === String(session.trackId));
+                if (dbTrack?.name) {
+                    return {
+                        ...session,
+                        trackName: dbTrack.name
+                    };
+                }
+
                 if (!session.csvFileName) return session;
                 
                 // Try to extract track name from "TrackName_Timestamp.csv"
@@ -38,34 +63,32 @@ function OfflineFiles() {
             setSessionWithTracks(processed);
         };
         processSessions();
-    }, [sessions]);
+    }, [sessions, tracks]);
 
-    const sortedSessions = useMemo(() => {
-        return [...sessionWithTracks].sort((a, b) => {
-            const trackA = a.trackName || "";
-            const trackB = b.trackName || "";
-            const isUnknownA = !trackA || trackA === "Unknown Track";
-            const isUnknownB = !trackB || trackB === "Unknown Track";
-
-            if (isUnknownA && isUnknownB) return 0;
-            if (isUnknownA) return 1;
-            if (isUnknownB) return -1;
-
-            const cmp = trackA.localeCompare(trackB, undefined, { numeric: true, sensitivity: "base" });
-            return trackSortOrder === "asc" ? cmp : -cmp;
+    const filteredSessions = useMemo(() => {
+        if (!selectedTrackId) return sessionWithTracks;
+        const selectedTrack = tracks.find(t => String(t.id) === String(selectedTrackId));
+        return sessionWithTracks.filter(session => {
+            if (session.trackId != null && String(session.trackId) === String(selectedTrackId)) {
+                return true;
+            }
+            if (selectedTrack?.name && session.trackName) {
+                return session.trackName.toLowerCase() === selectedTrack.name.toLowerCase();
+            }
+            return false;
         });
-    }, [sessionWithTracks, trackSortOrder]);
+    }, [sessionWithTracks, selectedTrackId, tracks]);
 
     // 2. Pagination Logic
-    const totalPages = Math.ceil(sortedSessions.length / itemsPerPage);
+    const totalPages = Math.ceil(filteredSessions.length / itemsPerPage);
     const indexOfLastItem = currentPage * itemsPerPage;
     const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-    const currentItems = sortedSessions.slice(indexOfFirstItem, indexOfLastItem);
+    const currentItems = filteredSessions.slice(indexOfFirstItem, indexOfLastItem);
 
     const paginate = (pageNumber) => setCurrentPage(pageNumber);
 
-    const handleToggleTrackSort = () => {
-        setTrackSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+    const handleTrackChange = (e) => {
+        setSelectedTrackId(e.target.value);
         setCurrentPage(1);
     };
 
@@ -103,52 +126,61 @@ function OfflineFiles() {
                 <img alt="Team Logo" src={logo} className="mx-auto h-10 w-auto" />
                 
                 <div className="mt-8">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-4">
                         <h2 className="text-sm font-medium text-gray-200">Session Files</h2>
-                        <button
-                            type="button"
-                            onClick={handleToggleTrackSort}
-                            className="rounded-md border border-gray-600 bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-200 hover:bg-gray-600 transition-colors"
+                        <select
+                            value={selectedTrackId}
+                            onChange={handleTrackChange}
+                            className="rounded-md border border-gray-600 bg-gray-700 px-3 py-1.5 text-xs font-medium text-gray-200 focus:border-indigo-500 focus:outline-none"
                         >
-                            Sort by Track ({trackSortOrder === "asc" ? "A → Z" : "Z → A"})
-                        </button>
+                            <option value="">All Tracks</option>
+                            {tracks.map((track) => (
+                                <option key={track.id} value={track.id}>
+                                    {track.name}
+                                </option>
+                            ))}
+                        </select>
                     </div>
                     
                     {/* List of Files */}
-                    <ul role="list" className="mt-3 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-2">
-                        {currentItems.map((session) => (
-                            <li
-                                key={session.id}
-                                className="col-span-1 flex rounded-md shadow-sm hover:shadow-lg hover:bg-gray-200 transform hover:-translate-y-1 transition-all duration-300 cursor-pointer"
-                                onClick={() => onClickReadFile(session)}
-                            >
-                                <div className="bg-gray-100 flex w-16 shrink-0 items-center justify-center rounded-l-md text-sm font-medium text-gray-300">
-                                    <FolderIcon aria-hidden="true" className="size-8" />
-                                </div>
-                                <div className="flex flex-1 items-center justify-between truncate rounded-r-md border-b border-r border-t border-gray-200 bg-white hover:bg-gray-100">
-                                    <div className="flex-1 truncate px-4 py-2 text-sm">
-                                        <p className="font-medium text-gray-900 hover:text-gray-600">
-                                            Track: <strong>{session.trackName || session.csvFileName}</strong>
-                                        </p>
-                                        <p className="text-gray-400">
-                                            Modified on <br />
-                                            {session.date + ' ' + session.time}
-                                        </p>
+                    {currentItems.length === 0 ? (
+                        <p className="mt-4 text-sm text-gray-400">No session files found for this track.</p>
+                    ) : (
+                        <ul role="list" className="mt-3 grid grid-cols-1 gap-5 sm:grid-cols-2 sm:gap-6 lg:grid-cols-2">
+                            {currentItems.map((session) => (
+                                <li
+                                    key={session.id}
+                                    className="col-span-1 flex rounded-md shadow-sm hover:shadow-lg hover:bg-gray-200 transform hover:-translate-y-1 transition-all duration-300 cursor-pointer"
+                                    onClick={() => onClickReadFile(session)}
+                                >
+                                    <div className="bg-gray-100 flex w-16 shrink-0 items-center justify-center rounded-l-md text-sm font-medium text-gray-300">
+                                        <FolderIcon aria-hidden="true" className="size-8" />
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={(e) => handleDeleteSession(e, session.id)}
-                                        className="mr-3 rounded-full p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                                    >
-                                        <TrashIcon aria-hidden="true" className="size-5" />
-                                    </button>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
+                                    <div className="flex flex-1 items-center justify-between truncate rounded-r-md border-b border-r border-t border-gray-200 bg-white hover:bg-gray-100">
+                                        <div className="flex-1 truncate px-4 py-2 text-sm">
+                                            <p className="font-medium text-gray-900 hover:text-gray-600">
+                                                Track: <strong>{session.trackName || session.csvFileName}</strong>
+                                            </p>
+                                            <p className="text-gray-400">
+                                                Modified on <br />
+                                                {session.date + ' ' + session.time}
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => handleDeleteSession(e, session.id)}
+                                            className="mr-3 rounded-full p-2 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                        >
+                                            <TrashIcon aria-hidden="true" className="size-5" />
+                                        </button>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
 
                     {/* Pagination Controls */}
-                    {sortedSessions.length > itemsPerPage && (
+                    {filteredSessions.length > itemsPerPage && (
                         <div className="flex items-center justify-between border-t border-gray-600 bg-gray-800 px-4 py-3 sm:px-6 mt-6 rounded-lg shadow-sm">
                             {/* Mobile Controls */}
                             <div className="flex flex-1 justify-between sm:hidden">
