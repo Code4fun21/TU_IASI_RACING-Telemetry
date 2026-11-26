@@ -81,7 +81,11 @@ app.get('/api/download/:filename',
 app.get('/api/sessions', 
   usageGuardMiddleware('d1_reads'), // <--- PROTECT READ
   async (c) => {
-    const { results } = await c.env.DB.prepare('SELECT * FROM Session ORDER BY date DESC, time DESC').all();
+    const sandbox = c.req.query('sandbox');
+    const query = sandbox === '1'
+      ? 'SELECT * FROM Session WHERE is_sandbox = 1 ORDER BY date DESC, time DESC'
+      : 'SELECT * FROM Session ORDER BY date DESC, time DESC';
+    const { results } = await c.env.DB.prepare(query).all();
     return c.json(results);
   }
 );
@@ -110,6 +114,39 @@ app.post('/api/sessions',
     `).bind(session.csvFileName, session.decodedFileName, session.trackId, session.date, session.time).run();
 
     return c.json({ success: true, id: info.meta.last_row_id });
+  }
+);
+
+app.on(['PUT', 'PATCH'], '/api/sessions/:id',
+  usageGuardMiddleware('d1_writes'), // <--- PROTECT WRITE
+  async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+
+    const allowedFields = ['csvFileName', 'decodedFileName', 'trackId', 'date', 'time', 'is_sandbox', 'notes'];
+    const updates = [];
+    const values = [];
+
+    for (const field of allowedFields) {
+      if (body[field] !== undefined) {
+        updates.push(`${field} = ?`);
+        values.push(body[field]);
+      }
+    }
+
+    if (updates.length === 0) {
+      return c.json({ error: 'No valid fields to update' }, 400);
+    }
+
+    values.push(id);
+    const query = `UPDATE Session SET ${updates.join(', ')} WHERE id = ?`;
+    const info = await c.env.DB.prepare(query).bind(...values).run();
+
+    if (info.meta.changes === 0) {
+      return c.json({ error: 'Session not found' }, 404);
+    }
+
+    return c.json({ success: true });
   }
 );
 

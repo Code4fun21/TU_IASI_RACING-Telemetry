@@ -27,6 +27,418 @@ const readBlobAsText = (blob) => {
     });
 };
 
+// --- HELPERS (GPS Drift Alignment, Smoothing, Boundary Containment & Gate Crossing Detection) ---
+const isValidCoord = (lat, lon) =>
+    typeof lat === "number" &&
+    typeof lon === "number" &&
+    !isNaN(lat) &&
+    !isNaN(lon) &&
+    Math.abs(lat) > 0.001 &&
+    Math.abs(lon) > 0.001;
+
+const extractRing = (feature) => {
+    let coords = feature?.geometry?.coordinates || [];
+    if (feature?.geometry?.type === "Polygon") {
+        coords = coords[0] || [];
+    }
+    if (
+        coords.length > 2 &&
+        coords[0][0] === coords[coords.length - 1][0] &&
+        coords[0][1] === coords[coords.length - 1][1]
+    ) {
+        return coords.slice(0, -1);
+    }
+    return coords;
+};
+
+const nearestOnPolyline = (lon, lat, polyline) => {
+    const n = polyline.length;
+    if (n === 0) return [lon, lat];
+    if (n === 1) return [polyline[0][0], polyline[0][1]];
+
+    const cosLat = Math.cos((lat * Math.PI) / 180);
+    let bestDistSq = Infinity;
+    let bestLon = polyline[0][0];
+    let bestLat = polyline[0][1];
+
+    for (let i = 0; i < n; i++) {
+        const a = polyline[i];
+        const b = polyline[(i + 1) % n];
+        const dx = (b[0] - a[0]) * cosLat;
+        const dy = b[1] - a[1];
+        const lenSq = dx * dx + dy * dy;
+
+        let t = 0;
+        if (lenSq > 0) {
+            t = (((lon - a[0]) * cosLat) * dx + (lat - a[1]) * dy) / lenSq;
+            if (t < 0) t = 0;
+            else if (t > 1) t = 1;
+        }
+
+        const projLon = a[0] + t * (b[0] - a[0]);
+        const projLat = a[1] + t * (b[1] - a[1]);
+        const ex = (lon - projLon) * cosLat;
+        const ey = lat - projLat;
+        const distSq = ex * ex + ey * ey;
+
+        if (distSq < bestDistSq) {
+            bestDistSq = distSq;
+            bestLon = projLon;
+            bestLat = projLat;
+        }
+    }
+
+    return [bestLon, bestLat];
+};
+
+const isPointInRing = (lon, lat, ring) => {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1];
+        const xj = ring[j][0], yj = ring[j][1];
+        const intersect =
+            (yi > lat) !== (yj > lat) &&
+            lon < ((xj - xi) * (lat - yi)) / ((yj - yi) || 1e-12) + xi;
+        if (intersect) inside = !inside;
+    }
+    return inside;
+};
+
+const median = (values) => {
+    if (!values || values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+        ? (sorted[mid - 1] + sorted[mid]) / 2
+        : sorted[mid];
+};
+
+const smoothGpsSeries = (latSeries, lonSeries) => {
+    const pairCount = Math.min(latSeries?.length || 0, lonSeries?.length || 0);
+    if (pairCount < 3) return { latSeries, lonSeries };
+
+    const outLat = latSeries.map((pt) => [...pt]);
+    const outLon = lonSeries.map((pt) => [...pt]);
+
+    for (let i = 1; i < pairCount - 1; i++) {
+        const prevLat = latSeries[i - 1][1], prevLon = lonSeries[i - 1][1];
+        const currLat = latSeries[i][1], currLon = lonSeries[i][1];
+        const nextLat = latSeries[i + 1][1], nextLon = lonSeries[i + 1][1];
+
+        if (!isValidCoord(prevLat, prevLon) || !isValidCoord(currLat, currLon) || !isValidCoord(nextLat, nextLon)) {
+            continue;
+        }
+
+        const dtPrev = Math.abs(latSeries[i][0] - latSeries[i - 1][0]);
+        const dtNext = Math.abs(latSeries[i + 1][0] - latSeries[i][0]);
+        if (dtPrev > 1500 || dtNext > 1500) continue;
+
+        outLat[i][1] = 0.25 * prevLat + 0.5 * currLat + 0.25 * nextLat;
+        outLon[i][1] = 0.25 * prevLon + 0.5 * currLon + 0.25 * nextLon;
+    }
+
+    return { latSeries: outLat, lonSeries: outLon };
+};
+
+const alignGpsSeriesToTrack = (latSeries, lonSeries, trackGeoJson) => {
+    if (
+        !latSeries?.length ||
+        !lonSeries?.length ||
+        !trackGeoJson?.features ||
+        trackGeoJson.features.length < 2
+    ) {
+        return { latSeries, lonSeries };
+    }
+
+    const outer = extractRing(trackGeoJson.features[0]);
+    const inner = extractRing(trackGeoJson.features[1]);
+    if (outer.length < 3 || inner.length < 3) {
+        return { latSeries, lonSeries };
+    }
+
+    const centerline = outer.map((p) => {
+        const innerPt = nearestOnPolyline(p[0], p[1], inner);
+        return [(p[0] + innerPt[0]) / 2, (p[1] + innerPt[1]) / 2];
+    });
+
+    const pairCount = Math.min(latSeries.length, lonSeries.length);
+    const latOffsets = [];
+    const lonOffsets = [];
+
+    for (let i = 0; i < pairCount; i++) {
+        const lat = latSeries[i][1];
+        const lon = lonSeries[i][1];
+        if (!isValidCoord(lat, lon)) continue;
+
+        const [projLon, projLat] = nearestOnPolyline(lon, lat, centerline);
+        const dLat = lat - projLat;
+        const dLon = lon - projLon;
+        const approxMeters = Math.hypot(
+            dLon * 111320 * Math.cos((lat * Math.PI) / 180),
+            dLat * 111320
+        );
+
+        if (approxMeters < 25) {
+            latOffsets.push(dLat);
+            lonOffsets.push(dLon);
+        }
+    }
+
+    const shiftLat = latOffsets.length > 0 ? median(latOffsets) : 0;
+    const shiftLon = lonOffsets.length > 0 ? median(lonOffsets) : 0;
+
+    const alignedLat = new Array(latSeries.length);
+    const alignedLon = new Array(lonSeries.length);
+
+    for (let i = 0; i < pairCount; i++) {
+        const tsLat = latSeries[i][0];
+        const tsLon = lonSeries[i][0];
+        let lat = latSeries[i][1];
+        let lon = lonSeries[i][1];
+
+        if (isValidCoord(lat, lon)) {
+            lat -= shiftLat;
+            lon -= shiftLon;
+
+            const insideOuter = isPointInRing(lon, lat, outer);
+            const insideInner = isPointInRing(lon, lat, inner);
+
+            if (!insideOuter || insideInner) {
+                const boundary = !insideOuter ? outer : inner;
+                const [wallLon, wallLat] = nearestOnPolyline(lon, lat, boundary);
+                const [centerLon, centerLat] = nearestOnPolyline(wallLon, wallLat, centerline);
+                lon = wallLon + 0.15 * (centerLon - wallLon);
+                lat = wallLat + 0.15 * (centerLat - wallLat);
+            }
+        }
+
+        alignedLat[i] = [tsLat, lat];
+        alignedLon[i] = [tsLon, lon];
+    }
+
+    for (let i = pairCount; i < latSeries.length; i++) alignedLat[i] = [...latSeries[i]];
+    for (let i = pairCount; i < lonSeries.length; i++) alignedLon[i] = [...lonSeries[i]];
+
+    return { latSeries: alignedLat, lonSeries: alignedLon };
+};
+
+const detectGateCrossings = (latSeries, lonSeries, gates, extraToleranceMeters = 12.0) => {
+    const pairCount = Math.min(latSeries?.length || 0, lonSeries?.length || 0);
+    if (pairCount < 2 || !gates || gates.length === 0) return [];
+
+    const points = [];
+    for (let i = 0; i < pairCount; i++) {
+        const lat = latSeries[i][1];
+        const lon = lonSeries[i][1];
+        if (isValidCoord(lat, lon)) {
+            points.push({ time: latSeries[i][0], lat, lon });
+        }
+    }
+    if (points.length < 2) return [];
+
+    const refLat = (gates[0].lat1 + gates[0].lat2) / 2;
+    const refLon = (gates[0].lon1 + gates[0].lon2) / 2;
+    const cosLat = Math.cos((refLat * Math.PI) / 180);
+    const metersPerLat = 111320;
+    const metersPerLon = 111320 * cosLat;
+
+    const toXY = (lat, lon) => [
+        (lon - refLon) * metersPerLon,
+        (lat - refLat) * metersPerLat
+    ];
+
+    const projectedGates = gates.map((g) => {
+        const [ax, ay] = toXY(g.lat1, g.lon1);
+        const [bx, by] = toXY(g.lat2, g.lon2);
+        const mx = (ax + bx) / 2;
+        const my = (ay + by) / 2;
+        const halfWidth = Math.hypot(bx - ax, by - ay) / 2;
+        return {
+            name: g.name,
+            ax,
+            ay,
+            bx,
+            by,
+            mx,
+            my,
+            maxRadius: halfWidth + extraToleranceMeters,
+            flowX: 0,
+            flowY: 0
+        };
+    });
+
+    const gateCount = projectedGates.length;
+    for (let i = 0; i < gateCount; i++) {
+        const prev = projectedGates[(i - 1 + gateCount) % gateCount];
+        const curr = projectedGates[i];
+        const next = projectedGates[(i + 1) % gateCount];
+
+        const v1x = curr.mx - prev.mx;
+        const v1y = curr.my - prev.my;
+        const l1 = Math.hypot(v1x, v1y) || 1;
+
+        const v2x = next.mx - curr.mx;
+        const v2y = next.my - curr.my;
+        const l2 = Math.hypot(v2x, v2y) || 1;
+
+        const fx = v1x / l1 + v2x / l2;
+        const fy = v1y / l1 + v2y / l2;
+        const fl = Math.hypot(fx, fy) || 1;
+        curr.flowX = fx / fl;
+        curr.flowY = fy / fl;
+    }
+
+    const crossings = [];
+    const lastTriggerTime = new Array(gateCount).fill(-Infinity);
+
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const [p1x, p1y] = toXY(p1.lat, p1.lon);
+        const [p2x, p2y] = toXY(p2.lat, p2.lon);
+
+        const rx = p2x - p1x;
+        const ry = p2y - p1y;
+        const moveLen = Math.hypot(rx, ry);
+        if (moveLen < 0.1) continue;
+
+        for (let gIdx = 0; gIdx < gateCount; gIdx++) {
+            const gate = projectedGates[gIdx];
+            const sx = gate.bx - gate.ax;
+            const sy = gate.by - gate.ay;
+            const denom = rx * sy - ry * sx;
+            if (Math.abs(denom) < 1e-9) continue;
+
+            const t = ((gate.ax - p1x) * sy - (gate.ay - p1y) * sx) / denom;
+            if (t < 0 || t > 1) continue;
+
+            const cx = p1x + t * rx;
+            const cy = p1y + t * ry;
+            const distFromMid = Math.hypot(cx - gate.mx, cy - gate.my);
+            if (distFromMid > gate.maxRadius) continue;
+
+            if (gateCount >= 3) {
+                const dot = (rx / moveLen) * gate.flowX + (ry / moveLen) * gate.flowY;
+                if (dot < 0.3) continue;
+            }
+
+            const crossTime = p1.time + t * (p2.time - p1.time);
+            const minCooldown = /^S\d+$/i.test(gate.name) ? 5000 : 1500;
+            if (Math.abs(crossTime - lastTriggerTime[gIdx]) < minCooldown) continue;
+
+            lastTriggerTime[gIdx] = crossTime;
+            crossings.push({
+                gateIndex: gIdx,
+                gateName: gate.name,
+                time: crossTime
+            });
+        }
+    }
+
+    crossings.sort((a, b) => a.time - b.time);
+    return crossings;
+};
+
+const enrichLapFields = (lap, index) => {
+    const out = { ...lap };
+    if (out.lap == null) out.lap = index + 1;
+
+    const lapEnd = out.S3 ?? out.ts;
+    if (out.S0 != null && lapEnd != null) {
+        const total = lapEnd - out.S0;
+        if (out.lap_time == null) out.lap_time = total;
+        if (out.lapTime == null) out.lapTime = out.lap_time;
+        if (out.ts == null) out.ts = lapEnd;
+        if (out.S3 == null) out.S3 = lapEnd;
+    }
+
+    if (out.S0 != null && out.S1 != null) {
+        const s1 = out.S1 - out.S0;
+        out.sector1 = s1;
+        out.S1_time = s1;
+    }
+    if (out.S1 != null && out.S2 != null) {
+        const s2 = out.S2 - out.S1;
+        out.sector2 = s2;
+        out.S2_time = s2;
+    }
+    if (out.S2 != null && lapEnd != null) {
+        const s3 = lapEnd - out.S2;
+        out.sector3 = s3;
+        out.S3_time = s3;
+    }
+
+    return out;
+};
+
+const buildGatesTimesFromCrossings = (crossings) => {
+    if (!crossings || crossings.length === 0) {
+        return { timestamps: [], lap_data: [] };
+    }
+
+    const lapData = [];
+    let currentLap = null;
+
+    for (const c of crossings) {
+        if (c.gateName === "S0") {
+            if (currentLap && currentLap.S0 !== undefined) {
+                const lapEnd = c.time;
+                currentLap.S3 = lapEnd;
+                currentLap.ts = lapEnd;
+                currentLap.complete = true;
+                lapData.push(enrichLapFields(currentLap, lapData.length));
+            }
+            currentLap = { S0: c.time };
+        } else if (currentLap) {
+            currentLap[c.gateName] = c.time;
+        }
+    }
+
+    return {
+        timestamps: crossings.map((c) => ({ gate: c.gateName, time: c.time })),
+        lap_data: lapData
+    };
+};
+
+const resolveGatesTimes = (rawGatesTimes, crossings) => {
+    const existingLaps = Array.isArray(rawGatesTimes?.lap_data) ? rawGatesTimes.lap_data : [];
+
+    // When backend/file lap_data already exists, keep every lap intact and only fill in
+    // missing sector or corner gates (e.g., missed S2 on Laps #1 and #4) from GPS crossings.
+    if (existingLaps.length > 0) {
+        const mergedLaps = existingLaps.map((lap, idx) => {
+            const merged = { ...lap };
+            const start = Number(merged.S0);
+            const end = Number(merged.S3 ?? merged.ts);
+
+            if (Array.isArray(crossings) && crossings.length > 0 && Number.isFinite(start) && Number.isFinite(end)) {
+                for (const c of crossings) {
+                    if (c.gateName === "S0" || c.gateName === "S3") continue;
+                    if (c.time > start + 1500 && c.time < end - 1500 && merged[c.gateName] == null) {
+                        merged[c.gateName] = c.time;
+                    }
+                }
+            }
+
+            return enrichLapFields(merged, idx);
+        });
+
+        return {
+            ...(rawGatesTimes || {}),
+            lap_data: mergedLaps
+        };
+    }
+
+    if (Array.isArray(crossings) && crossings.length > 0) {
+        const recomputed = buildGatesTimesFromCrossings(crossings);
+        if (recomputed.lap_data.length > 0) {
+            return recomputed;
+        }
+    }
+
+    return rawGatesTimes || { timestamps: [], lap_data: [] };
+};
+
 export class ButterworthProcessor {
     constructor() {
         this.coeffs = null;
@@ -51,14 +463,12 @@ export class ButterworthProcessor {
         const output = new Array(len);
 
         // Rule: Start-Up Transient Fix (Padding)
-        // We initialize the filter's "memory" with the first value
-        // to prevent the math from starting at zero.
         let x1 = input[0], x2 = input[0];
         let y1 = input[0], y2 = input[0];
 
         for (let i = 0; i < len; i++) {
             output[i] = (b[0] * input[i]) + (b[1] * x1) + (b[2] * x2)
-                        - (a[1] * y1) - (a[2] * y2);
+                - (a[1] * y1) - (a[2] * y2);
             
             // Shift memory
             x2 = x1; x1 = input[i];
@@ -87,14 +497,12 @@ export class ButterworthProcessor {
     }
 }
 
-
 class TelemetryProcessor {
     constructor() {
         this.bw = new ButterworthProcessor();
     }
 
     // Rule 1: Centripetal Correction with Unit Conversion
-    // yawRate: deg/s, velocity: km/h
     removeCentripetal(ayMeasured, yawRateDeg, velocityKmh) {
         const yawRateRad = yawRateDeg * (Math.PI / 180);
         const velocityMs = velocityKmh / 3.6;
@@ -102,28 +510,25 @@ class TelemetryProcessor {
         return ayMeasured - centripetalG;
     }
 
-        // Rule 2: Adaptive G-Gate (Sliding StdDev)
+    // Rule 2: Adaptive G-Gate (Sliding StdDev)
     getAdaptiveFc(values, baseFc) {
         if (values.length < 50) return baseFc;
 
-        // Calculate Variance of the first few seconds of the signal (or a sample)
         const sample = values.slice(0, 100); 
         const mean = sample.reduce((a, b) => a + b, 0) / sample.length;
         const variance = sample.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / sample.length;
         const stdDev = Math.sqrt(variance);
 
-        // If the data is generally noisy (Standard Deviation > 0.15G), 
-        // drop the cutoff to 3Hz to prevent the "fuzzy" lines.
         return stdDev > 0.15 ? 3.0 : baseFc;
     }
 
     // Rule 3: Gravity Compensation (Roll Gradient Approximation)
-    // rollGradient: degrees of body roll per 1G of lateral force
     compensateRoll(ayMeasured, azMeasured, rollGradient = 3.5) {
-        const phi = (ayMeasured * rollGradient) * (Math.PI / 180); // Radian roll
+        const phi = (ayMeasured * rollGradient) * (Math.PI / 180);
         return (ayMeasured * Math.cos(phi)) - (azMeasured * Math.sin(phi));
     }
 }
+
 const haversine = (lat1, lon1, lat2, lon2) => {
     const toRad = (deg) => (deg * Math.PI) / 180;
     const R = 6371;
@@ -133,18 +538,14 @@ const haversine = (lat1, lon1, lat2, lon2) => {
     return 2 * R * Math.asin(Math.sqrt(a));
 };
 
-
-
 export default function Dashboard() {
     const navigate = useNavigate();
     const location = useLocation();
     const { driverData } = useContext(DriverContext);
-    
 
     // ==========================================
     // 1. DATA PREPARATION
     // ==========================================
-
     const { setTelemetryData, setSessionInfo, telemetryData, sessionInfo } = useTelemetry();
 
     // Extract BOTH possible variables from the router
@@ -154,7 +555,6 @@ export default function Dashboard() {
     const activeSessionId = navSession?.id || navSessionId || sessionInfo?.id;
     const currentSession = navSession || sessionInfo;
 
-    // Debug check: This will print the ID to your F12 console
     useEffect(() => {
         console.log("Router State:", location.state);
         console.log("Resolved Session ID for Dropdown:", activeSessionId);
@@ -190,19 +590,18 @@ export default function Dashboard() {
             .catch(err => console.error("Error fetching drivers:", err));
     }, []);
 
-
     // Safety Check
     useEffect(() => {
         if (!rawData || rawData.length === 0) console.warn("No valid file data found.");
     }, [rawData]);
 
     // Fetch Track Assets
-useEffect(() => {
-        if (!currentSession?.trackId) return; // <--- CHANGE: session to currentSession
+    useEffect(() => {
+        if (!currentSession?.trackId) return;
         let isMounted = true;
         const fetchTrackFiles = async () => {
             try {
-                const track = await api.getTrackById(currentSession.trackId); // <--- CHANGE
+                const track = await api.getTrackById(currentSession.trackId);
                 const [gatesBlob, layoutBlob] = await Promise.all([
                     api.downloadFile(track.gates),
                     api.downloadFile(track.coordinates)
@@ -222,11 +621,9 @@ useEffect(() => {
     }, [currentSession?.trackId]);
 
     // ---------- DATA PARSING & CONVERSION ----------
-// 1. Parse Raw Data ONLY if a file was uploaded (Heavy Logic)
     const parsedData = useMemo(() => {
         if (!rawData || rawData.length === 0) return null;
 
-        // Helper to extract and scale data
         const extract = (targetKey, scaleFn = (v) => v) => {
             const keyMap = {
                 "RPM": "rpm", "Throttle_position": "throttlePosition", "Battery_voltage": "batteryVoltage",
@@ -252,7 +649,6 @@ useEffect(() => {
                 "Acceleration_on_Y_axis_rotated": "accelerationY_rotated", 
                 "Acceleration_on_Z_axis_rotated": "accelerationZ_rotated", 
                 
-                
                 "Acceleration_on_X_axis_RAW": "accelerationX_RAW", 
                 "Acceleration_on_Y_axis_RAW": "accelerationY_RAW", 
                 "Acceleration_on_Z_axis_RAW": "accelerationZ_RAW", 
@@ -261,14 +657,9 @@ useEffect(() => {
                 "Acceleration_on_Y_axis": "accelerationY", 
                 "Acceleration_on_Z_axis": "accelerationZ",
                 "Lap_Times": "lapTime", 
-                
-                
             };
             const sourceKey = keyMap[targetKey] || targetKey;
-
-            // --- OPTIMIZATION: DOWNSAMPLING ---
-            const STEP = 1; 
-            
+            const STEP = 1;
             const result = [];
 
             for (let i = 0; i < rawData.length; i += STEP) {
@@ -335,112 +726,75 @@ useEffect(() => {
             Acceleration_on_X_axis_RAW: extract("Acceleration_on_X_axis_RAW"), 
             Acceleration_on_Y_axis_RAW: extract("Acceleration_on_Y_axis_RAW"),
             Acceleration_on_Z_axis_RAW: extract("Acceleration_on_Z_axis_RAW"), 
-            Lap_Times:extract("Lap_Times"),
+            Lap_Times: extract("Lap_Times"),
             
-            Main_pulsewidth_bank1: [], Main_pulsewidth_bank2: [],
+            Main_pulsewidth_bank1: [],
+            Main_pulsewidth_bank2: [],
         };
 
-        console.log(out)
-        // --- Inside your allSeries useMemo ---
-//         const tp = new TelemetryProcessor();
-
-//         // 1. Setup Alignment & Jitter Correction
-//         const accelSeries = out["Acceleration_on_X_axis_KF"] || [];
-//         const gpsSeries = out["GPS_Speed"] || [];
-
-//         let fs = 20; // Default fallback
-//         if (accelSeries.length > 1) {
-//             let tsDiff = accelSeries[accelSeries.length - 1][0] - accelSeries[0][0];
-            
-//             // Auto-detect if timestamps are milliseconds (e.g., 840,000) or seconds (e.g., 840)
-//             let durationSeconds = tsDiff > 10000 ? tsDiff / 1000 : tsDiff;
-            
-//             fs = accelSeries.length / durationSeconds;
-            
-//             // Ultimate safety net: If math goes crazy, force it back to 20Hz
-//             if (fs < 5 || fs > 500) fs = 20; 
-// }
-
-//         const correctedAx = [];
-//         const correctedAy = [];
-
-//         // 2. Linear Interpolation Helper for GPS Speed
-//         const getInterpolatedSpeed = (targetTs) => {
-//             if (gpsSeries.length === 0) return 0;
-//             const nextIdx = gpsSeries.findIndex(p => p[0] >= targetTs);
-//             if (nextIdx <= 0) return gpsSeries[0]?.[1] || 0;
-            
-//             const p1 = gpsSeries[nextIdx - 1];
-//             const p2 = gpsSeries[nextIdx];
-//             const tRatio = (targetTs - p1[0]) / (p2[0] - p1[0]);
-//             return p1[1] + tRatio * (p2[1] - p1[1]);
-//         };
-
-//         // 3. The Combined Processing Loop
-//         for (let i = 0; i < accelSeries.length; i++) {
-//             const [ts, axRaw] = accelSeries[i];
-//             const ayRaw = out["Acceleration_on_Y_axis_KF"]?.[i]?.[1] || 0;
-//             const azRaw = out["Acceleration_on_Z_axis_KF"]?.[i]?.[1] || 1; // Default 1G
-//             // Change "gyroZ" to the correct key
-//             const gzRaw = out["Gyroscope_on_Z_axis_KF"]?.[i]?.[1] || 0;
-            
-//             // Rule 4: Get speed aligned exactly to MPU timestamp
-//             const speed = getInterpolatedSpeed(ts);
-
-//             // Rule 1: Centripetal Correction
-//             let ayClean = tp.removeCentripetal(ayRaw, gzRaw, speed);
-
-//             // Rule 3: Roll Compensation
-//             const ayCorrected = tp.compensateRoll(ayClean, azRaw, 3.0); // Assume 3 deg/G roll gradient
-
-//             correctedAx.push(axRaw);
-//             correctedAy.push(ayCorrected);
-//         }
-
-//         // 4. Rule 2: Adaptive Final Pass
-//         const fcX = tp.getAdaptiveFc(correctedAx, 5);
-//         const finalAx = tp.bw.filtFilt(correctedAx, fs, fcX);
-//         const finalAy = tp.bw.filtFilt(correctedAy, fs, 5);
-
-//         // 5. Map back
-//         out["Acceleration_on_X_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAx[i]]);
-//         out["Acceleration_on_Y_axis_KF"] = accelSeries.map((p, i) => [p[0], finalAy[i]]);
-        out.Gates_times = fileData.Gates_times || { timestamps: [], lap_data: [] }; 
-
-//         console.log(fileData)
+        out.Gates_times = fileData?.Gates_times || { timestamps: [], lap_data: [] };
         return out;
     }, [rawData, fileData]);
 
     // 2. Select Source: Use New Parsed Data if available, otherwise use Context Data
-    const allSeries = useMemo(() => {
+    const baseSeries = useMemo(() => {
         if (parsedData) return parsedData;
         if (telemetryData && Object.keys(telemetryData).length > 0) return telemetryData;
         return {};
     }, [parsedData, telemetryData]);
 
-    // 3. Save to Context (Run ONLY once when new data is parsed)
-    useEffect(() => {
-        if (parsedData && currentSession && currentSession.id) {
-            setTelemetryData(parsedData); 
-            setSessionInfo(currentSession);    
+    // 3. Smooth, Align GPS Points to Track Boundaries & Safely Merge Sector Gates
+    const allSeries = useMemo(() => {
+        if (!baseSeries || Object.keys(baseSeries).length === 0) return {};
+
+        const rawGatesTimes = fileData?.Gates_times || baseSeries.Gates_times || { timestamps: [], lap_data: [] };
+
+        if (!baseSeries.GPS_Latitude?.length || !baseSeries.GPS_Longitude?.length) {
+            return {
+                ...baseSeries,
+                Gates_times: resolveGatesTimes(rawGatesTimes, [])
+            };
         }
-    }, [parsedData, currentSession, setTelemetryData, setSessionInfo]);
 
+        const smoothed = smoothGpsSeries(baseSeries.GPS_Latitude, baseSeries.GPS_Longitude);
+        const { latSeries, lonSeries } = geoData
+            ? alignGpsSeriesToTrack(smoothed.latSeries, smoothed.lonSeries, geoData)
+            : smoothed;
 
-const gatesArray = useMemo(() => {
+        const crossings = gatesData && gatesData.length > 0
+            ? detectGateCrossings(latSeries, lonSeries, gatesData, 12.0)
+            : [];
+
+        const updatedGatesTimes = resolveGatesTimes(rawGatesTimes, crossings);
+
+        return {
+            ...baseSeries,
+            GPS_Latitude: latSeries,
+            GPS_Longitude: lonSeries,
+            Gates_times: updatedGatesTimes
+        };
+    }, [baseSeries, fileData?.Gates_times, geoData, gatesData]);
+
+    const lapRows = allSeries.Gates_times?.lap_data || [];
+
+    // 4. Save to Context (Single synchronized effect)
+    useEffect(() => {
+        if (allSeries && Object.keys(allSeries).length > 0 && currentSession?.id) {
+            setTelemetryData(allSeries);
+            setSessionInfo(currentSession);
+        }
+    }, [allSeries, currentSession, setTelemetryData, setSessionInfo]);
+
+    const gatesArray = useMemo(() => {
         const laps = allSeries.Gates_times?.lap_data;
         const timeRef = allSeries.ECU_time || allSeries.GPS_Speed;
 
-        // Safety checks
         if (!laps || !timeRef || timeRef.length === 0) return [];
 
         const segments = [];
-        
-        // 2. Get absolute session start/end
         const sessionStart = timeRef[0][0]; 
         const sessionEnd = timeRef[timeRef.length - 1][0];
 
-        // 3. Add "Pre-Session / Out Lap" (Data before Lap 1)
         const firstLapStart = laps[0]?.S0;
         if (firstLapStart && firstLapStart > sessionStart) {
             segments.push({
@@ -450,7 +804,6 @@ const gatesArray = useMemo(() => {
             });
         }
 
-        // 4. Add Actual Laps
         laps.forEach((lap, index) => {
             segments.push({
                 label: `Lap ${index + 1}`,
@@ -459,7 +812,6 @@ const gatesArray = useMemo(() => {
             });
         });
 
-        // 5. Add "Post-Session / In Lap" (Data after last lap)
         const lastLap = laps[laps.length - 1];
         const lastLapEnd = lastLap?.S3 || lastLap?.ts;
 
@@ -471,180 +823,156 @@ const gatesArray = useMemo(() => {
             });
         }
 
-        // 6. Map to standard format with index
         return segments.map((seg, i) => ({ ...seg, index: i }));
-
     }, [allSeries]);
 
-const availableTurns = useMemo(() => {
-    const laps = allSeries.Gates_times?.lap_data;
-    if (!laps || laps.length === 0) return [];
-    const turns = new Set();
-    laps.forEach(lap => {
-        Object.keys(lap).forEach(key => {
-            if (key.startsWith("T")) {
-                const baseName = key.replace(/ IN$/, "").replace(/ OUT$/, "");
-                turns.add(baseName);
-            }
+    const availableTurns = useMemo(() => {
+        const laps = allSeries.Gates_times?.lap_data;
+        if (!laps || laps.length === 0) return [];
+        const turns = new Set();
+        laps.forEach(lap => {
+            Object.keys(lap).forEach(key => {
+                if (key.startsWith("T")) {
+                    const baseName = key.replace(/ IN$/, "").replace(/ OUT$/, "");
+                    turns.add(baseName);
+                }
+            });
         });
-    });
-    
-    return Array.from(turns).sort((a, b) => {
-        const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-        const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-        return numA - numB;
-    });
-}, [allSeries]);
+        
+        return Array.from(turns).sort((a, b) => {
+            const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+            const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+            return numA - numB;
+        });
+    }, [allSeries]);
 
     // ---------- FILTERING ----------
-// 2. Filter Data based on Lap OR Stint
-// 2. Filter Data based on Lap, Turn, or Stint
-const filtered = useMemo(() => {
-    let timeWindows = [];
-    let isFiltering = false;
+    const filtered = useMemo(() => {
+        let timeWindows = [];
+        let isFiltering = false;
 
-    const lapsData = allSeries.Gates_times?.lap_data || [];
+        const lapsData = allSeries.Gates_times?.lap_data || [];
 
-    // CASE 1: A Turn is selected (Works for All Laps OR a Specific Lap)
-    if (selectedTurn) {
-        isFiltering = true;
+        // CASE 1: A Turn is selected
+        if (selectedTurn) {
+            isFiltering = true;
+
+            const chosenSegment = selectedLap !== null ? gatesArray[selectedLap] : null;
+            const isLapSegment = chosenSegment && /^Lap\s+\d+$/i.test(chosenSegment.label);
+
+            if (selectedLap !== null && !isLapSegment) {
+                timeWindows = [];
+            } else {
+                const lapsToCheck = isLapSegment
+                    ? [lapsData.find((l) => l && chosenSegment.startTime <= l.S0 && l.S0 <= chosenSegment.endTime) || lapsData[selectedLap]].filter(Boolean)
+                    : lapsData;
+
+                lapsToCheck.forEach((lap) => {
+                    if (!lap) return;
+                    const timeIn = lap[`${selectedTurn} IN`] ?? lap[`${selectedTurn}_IN`];
+                    const timeOut = lap[`${selectedTurn} OUT`] ?? lap[`${selectedTurn}_OUT`];
+
+                    if (timeIn != null && timeOut != null) {
+                        timeWindows.push({ min: Math.min(timeIn, timeOut), max: Math.max(timeIn, timeOut) });
+                    } else if (timeIn != null) {
+                        timeWindows.push({ min: timeIn, max: timeIn + 3000 });
+                    } else if (timeOut != null) {
+                        timeWindows.push({ min: timeOut - 3000, max: timeOut });
+                    }
+                });
+            }
+        }
+        // CASE 2: Only a Lap is selected (No Turn)
+        else if (selectedLap !== null && gatesArray[selectedLap]) {
+            isFiltering = true;
+            timeWindows.push({
+                min: gatesArray[selectedLap].startTime,
+                max: gatesArray[selectedLap].endTime
+            });
+        } 
+        // CASE 3: Only the Stint/Timestamp is selected
+        else if (selectedTs) {
+            isFiltering = true;
+            timeWindows.push({
+                min: Number(selectedTs.startTime),
+                max: Number(selectedTs.endTime)
+            });
+        }
+
+        if (!isFiltering) return allSeries;
+
+        const newFiltered = {};
         
-        // If a lap is selected, only check that lap. Otherwise, check ALL laps.
-        const lapsToCheck = selectedLap !== null 
-            ? [lapsData[selectedLap]].filter(Boolean) 
-            : lapsData;
+        Object.keys(allSeries).forEach(key => {
+            if (key === "Gates_times") {
+                newFiltered[key] = allSeries[key];
+                return;
+            }
 
-        lapsToCheck.forEach(lap => {
-            if (!lap) return;
-            const timeIn = lap[`${selectedTurn} IN`];
-            const timeOut = lap[`${selectedTurn} OUT`];
-            
-            if (timeIn && timeOut) {
-                timeWindows.push({ min: Math.min(timeIn, timeOut), max: Math.max(timeIn, timeOut) });
-            } else if (timeIn) {
-                timeWindows.push({ min: timeIn, max: timeIn + 3 });
-            } else if (timeOut) {
-                timeWindows.push({ min: timeOut - 3, max: timeOut });
+            const seriesData = allSeries[key];
+
+            if (Array.isArray(seriesData)) {
+                if (timeWindows.length === 0) {
+                    newFiltered[key] = [];
+                } else {
+                    newFiltered[key] = seriesData.filter(pt => {
+                        const t = pt[0]; 
+                        return timeWindows.some(w => t >= w.min && t <= w.max);
+                    });
+                }
+            } else {
+                newFiltered[key] = seriesData;
             }
         });
-    } 
-    // CASE 2: Only a Lap is selected (No Turn)
-    else if (selectedLap !== null && gatesArray[selectedLap]) {
-        isFiltering = true;
-        timeWindows.push({
-            min: gatesArray[selectedLap].startTime,
-            max: gatesArray[selectedLap].endTime
-        });
-    } 
-    // CASE 3: Only the Stint/Timestamp is selected
-    else if (selectedTs) {
-        isFiltering = true;
-        timeWindows.push({
-            min: Number(selectedTs.startTime),
-            max: Number(selectedTs.endTime)
-        });
-    }
 
-    // If no filters are active, return everything immediately
-    if (!isFiltering) return allSeries;
-
-    const newFiltered = {};
-    
-    Object.keys(allSeries).forEach(key => {
-        if (key === "Gates_times") {
-            newFiltered[key] = allSeries[key];
-            return;
-        }
-
-        const seriesData = allSeries[key];
-
-        if (Array.isArray(seriesData)) {
-             // If a filter is active but we found 0 valid time windows (e.g., turn wasn't crossed)
-             if (timeWindows.length === 0) {
-                 newFiltered[key] = [];
-             } else {
-                 newFiltered[key] = seriesData.filter(pt => {
-                     const t = pt[0]; 
-                     // Keep the point if it falls inside ANY of our active time windows
-                     return timeWindows.some(w => t >= w.min && t <= w.max);
-                 });
-             }
-        } else {
-             newFiltered[key] = seriesData;
-        }
-    });
-
-    return newFiltered;
-}, [allSeries, selectedLap, selectedTs, gatesArray, selectedTurn]);
-
-useEffect(() => {
-
-        if (rawData && rawData.length > 0 && allSeries && Object.keys(allSeries).length > 0) {
-            setTelemetryData(allSeries); 
-            setSessionInfo(currentSession);    
-        }
-    }, [allSeries, currentSession, rawData, setTelemetryData, setSessionInfo]);
+        return newFiltered;
+    }, [allSeries, selectedLap, selectedTs, gatesArray, selectedTurn]);
 
     // ==========================================
-    // 2. VIEW HELPERS (For Old Render Compatibility)
+    // 2. VIEW HELPERS
     // ==========================================
-    
-    // Map Data (Needs Sync of Lat/Lon/Speed)
-    // We assume CAN ID 0x117 provides all 3 together, so arrays stay synced.
     const mapData = useMemo(() => {
         if (!filtered.GPS_Longitude || filtered.GPS_Longitude.length === 0) return [];
-        // Map based on Longitude index, as they should be pairs
         return filtered.GPS_Longitude.map((pt, i) => [
-            pt[1], // lon
-            filtered.GPS_Latitude[i] ? filtered.GPS_Latitude[i][1] : 0, // lat
-            filtered.GPS_Speed[i] ? filtered.GPS_Speed[i][1] : 0,       // speed
-            pt[0] // time
+            pt[1],
+            filtered.GPS_Latitude[i] ? filtered.GPS_Latitude[i][1] : 0,
+            filtered.GPS_Speed[i] ? filtered.GPS_Speed[i][1] : 0,
+            pt[0]
         ]).filter(p => p[0] !== 0 && p[1] !== 0);
     }, [filtered.GPS_Longitude, filtered.GPS_Latitude, filtered.GPS_Speed]);
 
-// 1. Build the list of laps from the full dataset
-    
+    const speedVsDistance = useMemo(() => {
+        const distData = filtered.Distance;
+        const speedData = filtered.GPS_Speed;
 
-const speedVsDistance = useMemo(() => {
-    const distData = filtered.Distance;    // [[time, meters], ...] (Dense)
-    const speedData = filtered.GPS_Speed;  // [[time, km/h], ...]  (Sparse)
-
-    if (!distData || !speedData || distData.length === 0 || speedData.length === 0) {
-      return { dist: [], speed: [] };
-    }
-
-    const distOut = [];
-    const speedOut = [];
-
-    // We iterate through the SPEED data (since it's the limiting factor)
-    // and find the matching DISTANCE for that time.
-    
-    let distIdx = 0;
-    
-    for (let i = 0; i < speedData.length; i++) {
-        const [tSpeed, valSpeed] = speedData[i];
-
-        // Move the distance index forward until we catch up to the speed timestamp
-        // (Stop if we go past it)
-        while (distIdx < distData.length - 1 && distData[distIdx][0] < tSpeed) {
-            distIdx++;
+        if (!distData || !speedData || distData.length === 0 || speedData.length === 0) {
+            return { dist: [], speed: [] };
         }
 
-        // Check if the timestamps are close enough (e.g. within 100ms)
-        const [tDist, valDist] = distData[distIdx];
+        const distOut = [];
+        const speedOut = [];
+        let distIdx = 0;
         
-        if (Math.abs(tDist - tSpeed) < 0.1) {
-            distOut.push(valDist);
-            speedOut.push(valSpeed);
-        }
-    }
+        for (let i = 0; i < speedData.length; i++) {
+            const [tSpeed, valSpeed] = speedData[i];
 
-    return { dist: distOut, speed: speedOut };
-  }, [filtered.Distance, filtered.GPS_Speed]);
+            while (distIdx < distData.length - 1 && distData[distIdx][0] < tSpeed) {
+                distIdx++;
+            }
+
+            const [tDist, valDist] = distData[distIdx];
+            
+            if (Math.abs(tDist - tSpeed) < 0.1) {
+                distOut.push(valDist);
+                speedOut.push(valSpeed);
+            }
+        }
+
+        return { dist: distOut, speed: speedOut };
+    }, [filtered.Distance, filtered.GPS_Speed]);
 
     // UI Helpers
     const timeStamps = (arr) => arr ? arr.map(pt => pt[0]) : [];
-    const makeSeries = (arr, name, unit) => ({ name, unit, data: arr ? arr.map(pt => pt[1]) : [] });
     const toMsArr = (arr) => arr; 
 
     // Chart Builder Logic
@@ -667,7 +995,6 @@ const speedVsDistance = useMemo(() => {
         ["Sync Loss Count", "Sync_loss_counter", "cnt"], ["Sync Loss Reason", "Sync_loss_reason_code", "code"],
         ["Avg Fuel Flow", "Average_fuel_flow", "cc/min"],
 
-        
         ["Accel X", "Acceleration_on_X_axis", "G"], 
         ["Accel Y", "Acceleration_on_Y_axis", "G"],
         ["Accel Z", "Acceleration_on_Z_axis", "G"],
@@ -675,9 +1002,6 @@ const speedVsDistance = useMemo(() => {
         ["Accel X (RAW)", "Acceleration_on_X_axis_RAW", "G"], 
         ["Accel Y (RAW)", "Acceleration_on_Y_axis_RAW", "G"],
         ["Accel Z (RAW)", "Acceleration_on_Z_axis_RAW", "G"],
-        
-
-       
 
         ["Gyro X (RAW)", "Gyroscope_on_X_axis", "rad/s"],
         ["Gyro Y (RAW)", "Gyroscope_on_Y_axis", "rad/s"], 
@@ -701,7 +1025,7 @@ const speedVsDistance = useMemo(() => {
     const clearChart = () => setCommitted([]);
 
     // ==========================================
-    // 3. RENDER (Old Version Layout)
+    // 3. RENDER
     // ==========================================
     return (
         <div className="p-4 space-y-6">
@@ -712,11 +1036,11 @@ const speedVsDistance = useMemo(() => {
                     sessionId={activeSessionId} 
                     onSelect={(ts) => {
                         setSelectedTs(ts);
-                        setSelectedLap(null); // Auto-reset lap selection when changing stint
+                        setSelectedLap(null);
                     }} 
                 />
                 
-                {/* NEW: Driver & Stint Details Panel */}
+                {/* Driver & Stint Details Panel */}
                 {selectedTs && (
                     <div className="mt-3 p-3 bg-gray-50 rounded-md border border-gray-200 text-sm space-y-1">
                         <div className="flex justify-between">
@@ -765,10 +1089,8 @@ const speedVsDistance = useMemo(() => {
                 </select>
             </div>
 
-
-            {/* Map */}
+            {/* Map & Lap Times */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 h-[500px]">
-                
                 {/* Map Container (Takes 2/3 width) */}
                 <div className="bg-white p-4 rounded-lg shadow lg:col-span-2 relative flex flex-col min-w-0">
                     <h3 className="text-lg font-medium text-gray-900 text-center mb-2">Track Map</h3>
@@ -778,8 +1100,8 @@ const speedVsDistance = useMemo(() => {
                                 geoData={geoData}
                                 data={mapData}
                                 gates={gatesData}
-                                width="100%"   // Responsive width
-                                height="100%"  // Responsive height
+                                width="100%"
+                                height="100%"
                             />
                         ) : (
                             <div className="flex h-full items-center justify-center text-gray-400">
@@ -792,14 +1114,12 @@ const speedVsDistance = useMemo(() => {
                 {/* Lap Times Panel (Takes 1/3 width) */}
                 <div className="bg-white rounded-lg shadow lg:col-span-1 flex flex-col overflow-hidden min-w-0">
                     <LapTimesPanel
-                        laps={filtered?.Gates_times?.lap_data || []}
+                        laps={lapRows}
                         title="Lap Times"
                         className="w-full h-full border-0 shadow-none"
                     />
                 </div>
-
             </div>
-            
 
             {/* Chart Builder */}
             <div className="rounded-lg bg-white p-4 shadow">
@@ -901,7 +1221,7 @@ const speedVsDistance = useMemo(() => {
                 <h3 className="font-medium text-gray-700 mb-2">Speed vs Time</h3>
                 <VitalChart
                     dateTime={timeStamps(filtered.GPS_Speed)}
-                    series={[{ name: "Speed", data: filtered.GPS_Speed.map(([, v]) => v), unit: "km/h" }]}
+                    series={[{ name: "Speed", data: (filtered.GPS_Speed || []).map(([, v]) => v), unit: "km/h" }]}
                     height={300}
                 />
             </div>
@@ -917,35 +1237,35 @@ const speedVsDistance = useMemo(() => {
                         {
                             name: "Throttle", unit: "%",
                             time: timeStamps(filtered.Throttle_position),
-                            data: filtered.Throttle_position.map(([, v]) => v),
+                            data: (filtered.Throttle_position || []).map(([, v]) => v),
                         },
                         {
                             name: "Speed", unit: "km/h",
                             time: timeStamps(filtered.GPS_Speed),
-                            data: filtered.GPS_Speed.map(([, v]) => v),
+                            data: (filtered.GPS_Speed || []).map(([, v]) => v),
                         },
                         {
                             name: "RPM", unit: "RPM",
                             time: timeStamps(filtered.RPM),
-                            data: filtered.RPM.map(([, v]) => v),
+                            data: (filtered.RPM || []).map(([, v]) => v),
                         },
                         {
                             name: "Coolant temp", unit: "°C",
                             time: toMsArr(timeStamps(filtered.Coolant_temperature)), 
-                            data: filtered.Coolant_temperature.map(([, v]) => v),
+                            data: (filtered.Coolant_temperature || []).map(([, v]) => v),
                         },
                     ]}
                     height={300}
                 />
             </div>
 
-           {/* 118 (Accel XYZ) - Converted to AutoPair */}
+            {/* 118 (Accel XYZ) */}
             <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">118 (Acceleration)</h3>
                 <AutoPairChart
                     align="base-fastest"
                     alignMethod="linear"
-                    toleranceMs={100} // Low tolerance for high-freq IMU data
+                    toleranceMs={100}
                     height={300}
                     series={[
                         {
@@ -967,7 +1287,7 @@ const speedVsDistance = useMemo(() => {
                 />
             </div>
 
-            {/* 119 (Gyro XYZ) - Converted to AutoPair */}
+            {/* 119 (Gyro XYZ) */}
             <div className="rounded-lg bg-white p-4 shadow">
                 <h3 className="font-medium text-gray-700 mb-2">119 (Gyroscope)</h3>
                 <AutoPairChart

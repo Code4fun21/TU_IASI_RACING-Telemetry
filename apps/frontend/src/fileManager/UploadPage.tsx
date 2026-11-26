@@ -73,7 +73,23 @@ export default function UploadPage() {
   const [currentTurnName, setCurrentTurnName] = useState<string>("");
   const [gateStart, setGateStart] = useState<Coordinate | null>(null);
 
-  const createPerpendicularGate = (coord: any[], nextCoord:any[], name: string): Gate => {
+const createPerpendicularGate = (coord: any[], nextCoord: any[], name: string, rightLine?: any): Gate => {
+    if (rightLine) {
+      const rightSnap = turf.nearestPointOnLine(rightLine, turf.point(coord));
+      const rightCoord = rightSnap.geometry.coordinates;
+      const crossBearing = turf.bearing(coord, rightCoord);
+      const extendedLeft = turf.destination(coord, 0.0035, crossBearing + 180, { units: 'kilometers' });
+      const extendedRight = turf.destination(rightCoord, 0.0035, crossBearing, { units: 'kilometers' });
+      return {
+        name,
+        lat1: extendedLeft.geometry.coordinates[1],
+        lon1: extendedLeft.geometry.coordinates[0],
+        lat2: extendedRight.geometry.coordinates[1],
+        lon2: extendedRight.geometry.coordinates[0],
+        isPreview: false,
+      };
+    }
+
     // Turf strictly expects [longitude, latitude]
     const bearing = turf.bearing(coord, nextCoord);
     
@@ -82,7 +98,7 @@ export default function UploadPage() {
     
     // CHANGED: 0.006 km = 6 meters from the center line (12 meters total gate width)
     // This perfectly matches the coordinate spread in your screenshot!
-    const distance = 0.006; 
+    const distance = 0.01; 
     
     const point1 = turf.destination(coord, distance, perpBearing, {units: 'kilometers'});
     const point2 = turf.destination(coord, distance, perpBearing + 180, {units: 'kilometers'});
@@ -150,51 +166,101 @@ export default function UploadPage() {
         setWizardActive(false);
     }
   };
-
 const generateFSKinematicGates = () => {
-  if (!previewLayout || !previewLayout.features || previewLayout.features.length < 1) return;
+  if (!previewLayout || !previewLayout.features || previewLayout.features.length < 2) return;
 
-  let leftRaw: number[][] = previewLayout.features[0].geometry.coordinates;
-  if (previewLayout.features[0].geometry.type === "Polygon") leftRaw = (leftRaw as any)[0];
-  const isClosed = leftRaw[0][0] === leftRaw[leftRaw.length - 1][0] && leftRaw[0][1] === leftRaw[leftRaw.length - 1][1];
-  const leftCoords = isClosed ? leftRaw.slice(0, -1) : leftRaw;
+  const extractRing = (feature: any): number[][] => {
+    let raw: number[][] = feature.geometry.coordinates;
+    if (feature.geometry.type === "Polygon") raw = (raw as any)[0];
+    const closed = raw[0][0] === raw[raw.length - 1][0] && raw[0][1] === raw[raw.length - 1][1];
+    return closed ? raw.slice(0, -1) : raw;
+  };
+
+  const resampleRing = (coords: number[][], targetCount: number): number[][] => {
+    const closedCoords = [...coords, coords[0]];
+    const line = turf.lineString(closedCoords);
+    const totalLen = turf.length(line, { units: 'kilometers' });
+    if (totalLen <= 0) return coords;
+    const sampled: number[][] = [];
+    for (let i = 0; i < targetCount; i++) {
+      const dist = (i / targetCount) * totalLen;
+      const pt = turf.along(line, dist, { units: 'kilometers' });
+      sampled.push(pt.geometry.coordinates);
+    }
+    return sampled;
+  };
+
+  const rawLeft = extractRing(previewLayout.features[0]);
+  const rawRight = extractRing(previewLayout.features[1]);
+  const targetPoints = Math.max(rawLeft.length, 260);
+
+  const leftCoords = rawLeft.length < 260 ? resampleRing(rawLeft, targetPoints) : rawLeft;
+  const rightCoords = rawRight.length < 260 ? resampleRing(rawRight, targetPoints) : rawRight;
   const N = leftCoords.length;
 
-  const zones = processTrackGeometry(previewLayout);
-  const sectors=getSectorIndices(previewLayout.features[0].geometry.coordinates,previewLayout.features[1].geometry.coordinates,zones)
-  console.log(zones,sectors)
+  const rightLine = turf.lineString([...rightCoords, rightCoords[0]]);
+
+  const normalizedLayout = {
+    ...previewLayout,
+    features: [
+      {
+        ...previewLayout.features[0],
+        geometry: {
+          type: "LineString",
+          coordinates: [...leftCoords, leftCoords[0]]
+        }
+      },
+      {
+        ...previewLayout.features[1],
+        geometry: {
+          type: "LineString",
+          coordinates: [...rightCoords, rightCoords[0]]
+        }
+      },
+      ...previewLayout.features.slice(2)
+    ]
+  };
+
+  const zones = processTrackGeometry(normalizedLayout);
+  const sectors = getSectorIndices(leftCoords, rightCoords, zones);
+  console.log(zones, sectors);
   if (!zones || zones.length === 0) return;
 
   const finalGates: Gate[] = [];
+  const minSpan = Math.max(3, Math.floor(N * 0.02));
 
   zones.forEach((zone: any, index: number) => {
     const maneuverName = `T${index + 1}-${zone.label}`;
 
-    const startIdx = zone.startIndex % N;
-    const endIdx = zone.endIndex % N;
+    let startIdx = ((zone.startIndex % N) + N) % N;
+    let endIdx = ((zone.endIndex % N) + N) % N;
+    const span = (endIdx - startIdx + N) % N;
 
-    const gIn = createPerpendicularGate(leftCoords[startIdx], leftCoords[(startIdx + 1) % N], `${maneuverName} IN`);
-    const gOut = createPerpendicularGate(leftCoords[endIdx], leftCoords[(endIdx + 1) % N], `${maneuverName} OUT`);
+    if (span < minSpan) {
+      const pad = Math.ceil((minSpan - span) / 2);
+      startIdx = (startIdx - pad + N) % N;
+      endIdx = (endIdx + pad) % N;
+    }
+
+    const gIn = createPerpendicularGate(leftCoords[startIdx], leftCoords[(startIdx + 1) % N], `${maneuverName} IN`, rightLine);
+    const gOut = createPerpendicularGate(leftCoords[endIdx], leftCoords[(endIdx + 1) % N], `${maneuverName} OUT`, rightLine);
     
     finalGates.push(gIn, gOut);
   });
 
-    if (!sectors || sectors.length === 0) return;
-
+  if (!sectors || sectors.length === 0) return;
 
   sectors.forEach((sector: any, index: number) => {
-    const sector_name=`S${index}`;
+    const sector_name = `S${index}`;
+    const idx = ((sector % N) + N) % N;
 
-    const sectorGate=createPerpendicularGate(leftCoords[sector],leftCoords[(sector + 1) % N],sector_name)
+    const sectorGate = createPerpendicularGate(leftCoords[idx], leftCoords[(idx + 1) % N], sector_name, rightLine);
 
-    
     finalGates.push(sectorGate);
   });
 
-
   setPreviewGates(finalGates);
 };
-
 
 
   const wizardPreviewGates = useMemo(() => {
@@ -750,7 +816,7 @@ const generateFSKinematicGates = () => {
   geoData={previewLayout}
   // YOU MUST ADD wizardPreviewGates HERE:
   gates={[...previewGates, ...activeDrawingGate, ...wizardPreviewGates]} 
-  rotation={-90}
+  rotation={0}
   onMapClick={handleMapClick}
   onPointRightClick={handleGateDelete}
 />
